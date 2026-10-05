@@ -1,14 +1,14 @@
-# CYD Home Hub — CYD-2432S028
+# CYD Home Hub — CYD-2432S028 / TPM408-2.8
 
-A touch-first ESP32 application launcher for the 2.8-inch 240×320 **CYD-2432S028**. It is not a device-hosted web UI.
+A touch-first 320×240 landscape application launcher for the 2.8-inch **TPM408-2.8 / CYD-2432S028**. It is not a device-hosted web UI. The screen sleeps after 10 seconds and wakes on the next touch.
 
 ## Included apps
 
-- **Devices:** switches and lights (including Sonoff/eWeLink devices) exposed by Home Assistant; tap a card to toggle it.
-- **Wi-Fi:** connects through an on-screen captive portal named `CYD-Home`.
-- **Bluetooth:** scans and shows up to three nearby BLE device names/addresses. It does not pair with or control Bluetooth devices.
-- **IR Remote:** sends an optional NEC IR command using an externally wired, transistor-driven IR LED on GPIO 27.
-- **Settings:** reports the secure Home Assistant bridge status.
+- **Devices:** reads and controls up to 16 `switch`, `light`, `fan`, and `cover` entities exposed by Home Assistant; four devices appear per page.
+- **Wi-Fi:** opens the `CYD-Home` captive portal for Wi-Fi credentials, Home Assistant URL, long-lived token, and optional NEC IR code.
+- **Bluetooth:** scans and lists up to four nearby BLE device names/addresses. It does not pair with or control Bluetooth devices.
+- **IR Remote:** sends your configured 32-bit NEC code through an externally wired transmitter on GPIO 27.
+- **System:** shows status, configuration state, and the 10-second touch-to-wake display sleep policy.
 
 ## Why Home Assistant is used for eWeLink
 
@@ -28,15 +28,14 @@ Push this folder to a GitHub repository, enable **Settings → Pages → GitHub 
 
 ## First use
 
-1. On the CYD, open **Wi-Fi** → **Connect / change Wi-Fi**. Join the `CYD-Home` network from your phone and visit `192.168.4.1`.
+1. On the CYD, tap **Wi-Fi** → **Setup portal**. Join the `CYD-Home` network from your phone and visit `192.168.4.1`.
 2. Create a long-lived access token in Home Assistant under your profile’s Security page, then enter both the Home Assistant URL and that token in the portal alongside your Wi-Fi details.
-3. Open **Devices**. Your Home Assistant `switch.*`, `light.*`, `fan.*`, and `cover.*` entities appear there.
-
-The USB serial `HA_URL` and `HA_TOKEN` commands remain available as a recovery path, but normal setup never needs them.
+3. Enter your home Wi-Fi, `http://homeassistant.local:8123` (or your local Home Assistant URL), and the token. You can also set an IR NEC code, such as `20DF10EF`.
+4. Open **Devices**. Your Home Assistant `switch.*`, `light.*`, `fan.*`, and `cover.*` entities appear there.
 
 ## Hardware notes
 
-- This targets the TPM408-2.8 / CYD-2432S028 standard ILI9341 layout. The touch calibration is a common starting point; clones vary, so run TFT_eSPI's calibration example and replace `touchCalData` if touch targets are offset.
+- This targets the verified TPM408-2.8 / CYD-2432S028R ILI9341 layout: display reset GPIO 12, backlight GPIO 21, 65 MHz display SPI, color inversion, and separate bit-banged XPT2046 touch pins (33/25/32/39).
 - GPIO 27 is used only for the optional IR output. Use a transistor and IR LED with current limiting; do not drive an IR LED directly from the ESP32 pin.
 - 4 MB ESP32 CYDs are tight on space; the included partition table leaves room for OTA updates but not a large local asset library.
 

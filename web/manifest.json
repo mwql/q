@@ -1,6 +1,6 @@
 {
   "name": "CYD Home Hub",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "new_install_prompt_erase": true,
   "builds": [{
     "chipFamily": "ESP32",
