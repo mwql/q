@@ -6,7 +6,7 @@ A touch-first ESP32 application launcher for the 2.8-inch 240×320 **CYD-2432S02
 
 - **Devices:** switches and lights (including Sonoff/eWeLink devices) exposed by Home Assistant; tap a card to toggle it.
 - **Wi-Fi:** connects through an on-screen captive portal named `CYD-Home`.
-- **Bluetooth:** BLE discovery only. It never pairs, injects, jams, or attacks devices.
+- **Bluetooth:** a dedicated privacy-first status app; Bluetooth pairing, scanning, and device control are disabled in this home-controller release.
 - **IR Remote:** sends an optional NEC IR command using an externally wired, transistor-driven IR LED on GPIO 27.
 - **Settings:** reports the secure Home Assistant bridge status.
 
@@ -23,7 +23,7 @@ Push this folder to a GitHub repository, enable **Settings → Pages → GitHub 
 ### Local build
 
 1. Install [PlatformIO Core](https://platformio.org/install/cli), then run `pio run` in this folder.
-2. Copy `.pio/build/cyd_2432s028/firmware.bin` to `web/firmware/cyd-home.bin`.
+2. Copy the app, bootloader, partition table, and `boot_app0.bin` to `web/firmware/` as the included GitHub workflow does. The installer manifest flashes each at its required ESP32 address.
 3. Publish the `web/` directory over HTTPS (GitHub Pages, Netlify, or your own web host). Open `web/index.html` using Chrome or Edge and press **Connect & install**.
 
 ## First use

@@ -5,7 +5,6 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
-#include <NimBLEDevice.h>
 #include "Config.h"
 
 TFT_eSPI tft;
@@ -79,8 +78,7 @@ void drawDevices() {
   if (!shown) card(60,"No devices found","Expose Sonoff entities in Home Assistant",TFT_MAROON);
 }
 void drawWifi() { header("Wi-Fi"); card(55,WiFi.isConnected()?WiFi.SSID():"Not connected",WiFi.isConnected()?WiFi.localIP().toString():"Tap to open setup portal",TFT_DARKGREEN); card(115,"Connect / change Wi-Fi","Opens temporary CYD-Home portal",TFT_DARKCYAN); card(175,"Forget Wi-Fi","Tap again to confirm",TFT_MAROON); }
-class ScanCallbacks : public NimBLEScanCallbacks { void onResult(const NimBLEAdvertisedDevice *d) override { Serial.printf("BLE: %s\n",d->toString().c_str()); } } scanCallbacks;
-void drawBle() { header("Bluetooth"); card(48,"BLE scanner","Tap to scan for 5 seconds",APP_BLUE); card(106,"Safe utility","Discovery only; no pairing or attacks",TFT_DARKGREY); card(164,"Results","See names in USB serial monitor",TFT_DARKGREY); }
+void drawBle() { header("Bluetooth"); card(48,"Bluetooth","Bluetooth radio reserved",APP_BLUE); card(106,"Status","No pairing or device control enabled",TFT_DARKGREY); card(164,"Privacy","This app never scans or connects",TFT_DARKGREY); }
 void drawIr() { header("IR Remote"); card(55,config.irName,"Tap to transmit configured NEC code",TFT_MAROON); card(115,"IR transmitter needed","Wire IR LED + transistor to GPIO 27",TFT_DARKGREY); card(175,"Code",String("0x")+String(config.irCode,HEX),TFT_DARKGREY); }
 void drawSettings() { header("Settings"); card(52,"Home Assistant bridge",config.haUrl.length()?config.haUrl:"Not configured",TFT_DARKCYAN); card(112,"Setup help","Use USB serial commands below",TFT_DARKGREY); card(172,"Security", "Token stored only on this CYD",TFT_DARKGREEN); card(232,"Back",statusLine,TFT_DARKGREY); }
 void draw() { switch(screen) { case Screen::HOME:drawHome();break; case Screen::DEVICES:drawDevices();break;case Screen::WIFI:drawWifi();break;case Screen::BLE:drawBle();break;case Screen::IR:drawIr();break;case Screen::SETTINGS:drawSettings();break;default:drawHome(); } }
@@ -106,10 +104,18 @@ void processSerial() { if (!Serial.available()) return; String s=Serial.readStri
 void handleTouch() { uint16_t x,y; if(!tft.getTouch(&x,&y) || millis()-lastTouch<300) return; lastTouch=millis();
   if(screen==Screen::HOME) { if(y<100)screen=Screen::DEVICES;else if(y<156)screen=Screen::WIFI;else if(y<212)screen=Screen::BLE;else if(y<268)screen=Screen::IR;else screen=Screen::SETTINGS; }
   else if(screen==Screen::WIFI) { if(y>95&&y<170)startPortal(); else if(y>170){WiFi.disconnect(true,true);statusLine="Wi-Fi forgotten";} }
-  else if(screen==Screen::BLE&&y<110) { tft.fillScreen(TFT_BLACK);tft.setTextColor(TFT_WHITE);tft.drawString("Scanning...",70,120); NimBLEDevice::getScan()->start(5,false);statusLine="BLE scan finished"; }
+  else if(screen==Screen::BLE&&y<110) { statusLine="Bluetooth is safely disabled"; }
   else if(screen==Screen::IR&&y<115) sendNec(config.irCode);
   else if(screen==Screen::DEVICES) { DynamicJsonDocument doc(12288);if(apiGet("/api/states",doc)){int row=(y-42)/54,seen=0;for(JsonObject st:doc.as<JsonArray>()){String id=st["entity_id"]|"";if(id.startsWith("switch.")||id.startsWith("light.")||id.startsWith("fan.")||id.startsWith("cover.")){if(seen++==row){callService(id,String(st["state"]|"")!="on");break;}}}} }
   else screen=Screen::HOME; draw();
 }
-void setup() { Serial.begin(115200); pinMode(BACKLIGHT_PIN,OUTPUT);digitalWrite(BACKLIGHT_PIN,HIGH);tft.init();tft.setRotation(0);tft.setTouch(touchCalData);loadConfig();WiFi.mode(WIFI_STA);WiFi.begin(); NimBLEDevice::init("CYD Home"); NimBLEDevice::getScan()->setScanCallbacks(&scanCallbacks,false); draw(); }
+void setup() {
+  Serial.begin(115200);
+  // Failsafe: enable the CYD-2432S028 backlight before any other subsystem.
+  pinMode(BACKLIGHT_PIN, OUTPUT); digitalWrite(BACKLIGHT_PIN, HIGH); delay(80);
+  tft.init(); tft.setRotation(0); tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK); tft.setTextSize(2); tft.drawCentreString("CYD Home starting", 120, 140, 2);
+  tft.setTouch(touchCalData); loadConfig(); WiFi.mode(WIFI_STA); WiFi.begin();
+  draw();
+}
 void loop() { processSerial();handleTouch();delay(15); }
