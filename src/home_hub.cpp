@@ -7,6 +7,7 @@
 #include <TFT_eSPI.h>
 #include <TFT_Touch.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -66,7 +67,7 @@ bool splashDone = false;
 
 uint8_t themeIndex = 0;
 uint8_t sleepIndex = 0;
-int8_t utcOffset = 0;
+int8_t utcOffset = 3;
 uint8_t wifiOffset = 0;
 uint8_t deviceOffset = 0;
 uint8_t deviceCount = 0;
@@ -83,7 +84,7 @@ String toastMessage;
 String selectedSsid;
 String keyboardTitle;
 String keyboardValue;
-String bridgeUrl;
+String bridgeUrl = "https://bott-r34h.onrender.com";
 String bridgeKey;
 String irCode = "20DF10EF";
 String wifiNames[12];
@@ -121,13 +122,25 @@ void loadSettings() {
   preferences.begin("cydhub2", false);
   themeIndex = preferences.getUChar("theme", 0);
   sleepIndex = preferences.getUChar("sleep", 0);
-  utcOffset = preferences.getChar("utc_offset", 0);
-  bridgeUrl = preferences.getString("bridge_url", "");
+  utcOffset = preferences.getChar("utc_offset", 3);
+  bridgeUrl = preferences.getString("bridge_url", "https://bott-r34h.onrender.com");
   bridgeKey = preferences.getString("bridge_key", "");
   irCode = preferences.getString("ir_code", "20DF10EF");
   if (themeIndex >= kThemeCount) themeIndex = 0;
   if (sleepIndex > 3) sleepIndex = 0;
-  if (utcOffset < -12 || utcOffset > 14) utcOffset = 0;
+  if (utcOffset < -12 || utcOffset > 14) utcOffset = 3;
+  if (bridgeUrl.length() == 0) {
+    bridgeUrl = "https://bott-r34h.onrender.com";
+  }
+
+  // Pre-seed default eWeLink light so device screen is ready immediately
+  if (deviceCount == 0) {
+    devices[0].id = "100128c304";
+    devices[0].name = "M.room(corner)";
+    devices[0].type = "light";
+    devices[0].state = "off";
+    deviceCount = 1;
+  }
 }
 
 // ----- UI primitives -------------------------------------------------------------
@@ -310,7 +323,7 @@ void startClock() {
   ntpStarted = true;
 }
 
-// ----- Web Bridge client ---------------------------------------------------------
+// ----- Direct Web Cloud / Bridge client -------------------------------------------
 String bridgeBase() {
   String base = bridgeUrl;
   while (base.endsWith("/")) base.remove(base.length() - 1);
@@ -321,94 +334,248 @@ bool bridgeReady() {
   return WiFi.status() == WL_CONNECTED && bridgeUrl.length() > 7;
 }
 
-void addBridgeHeaders(HTTPClient& request) {
-  request.addHeader("Accept", "application/json");
-  if (bridgeKey.length()) request.addHeader("X-CYD-Key", bridgeKey);
+bool httpRequest(const String& url, const String& method, const String& payload,
+                String& outResponse, int& outCode) {
+  if (WiFi.status() != WL_CONNECTED) {
+    outCode = -1;
+    return false;
+  }
+
+  HTTPClient http;
+  http.setTimeout(18000);  // 18s for Render cloud free tier wake-up
+  http.setReuse(false);
+
+  bool isHttps = url.startsWith("https://");
+  bool ok = false;
+
+  if (isHttps) {
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();  // Bypass certificate validation on ESP32
+    if (http.begin(secureClient, url)) {
+      http.addHeader("Accept", "application/json");
+      if (bridgeKey.length()) http.addHeader("X-CYD-Key", bridgeKey);
+      if (method == "POST") {
+        http.addHeader("Content-Type", "application/json");
+        outCode = http.POST(payload);
+      } else {
+        outCode = http.GET();
+      }
+      if (outCode > 0) {
+        outResponse = http.getString();
+      }
+      http.end();
+      secureClient.stop();
+      ok = (outCode >= 200 && outCode < 300);
+    }
+  } else {
+    WiFiClient client;
+    if (http.begin(client, url)) {
+      http.addHeader("Accept", "application/json");
+      if (bridgeKey.length()) http.addHeader("X-CYD-Key", bridgeKey);
+      if (method == "POST") {
+        http.addHeader("Content-Type", "application/json");
+        outCode = http.POST(payload);
+      } else {
+        outCode = http.GET();
+      }
+      if (outCode > 0) {
+        outResponse = http.getString();
+      }
+      http.end();
+      client.stop();
+      ok = (outCode >= 200 && outCode < 300);
+    }
+  }
+
+  return ok;
 }
 
 bool fetchDevices() {
+  if (!bridgeReady()) {
+    showToast("Connect Wi-Fi first");
+    return false;
+  }
+  showLoading("Syncing Cloud Devices...");
+
+  // 1. Try eWeLink endpoint from Render cloud
+  String endpoint = bridgeBase() + "/api/ewelink/devices";
+  String resp;
+  int code = 0;
+  bool ok = httpRequest(endpoint, "GET", "", resp, code);
+
+  // 2. If 404, fallback to /api/v1/devices
+  if (!ok && code == 404) {
+    endpoint = bridgeBase() + "/api/v1/devices";
+    ok = httpRequest(endpoint, "GET", "", resp, code);
+  }
+
+  // 3. If both failed, try single light status endpoint /api/status/light
+  if (!ok) {
+    endpoint = bridgeBase() + "/api/status/light";
+    int lightCode = 0;
+    String lightResp;
+    if (httpRequest(endpoint, "GET", "", lightResp, lightCode) && lightCode == 200) {
+      lightResp.trim();
+      lightResp.toUpperCase();
+      deviceCount = 1;
+      deviceOffset = 0;
+      devices[0].id = "100128c304";
+      devices[0].name = "M.room(corner)";
+      devices[0].type = "light";
+      devices[0].state = (lightResp == "ON") ? "on" : "off";
+      showToast("Room Light: " + lightResp);
+      return true;
+    }
+
+    showToast("Cloud error " + String(code));
+    return false;
+  }
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, resp);
+  if (err) {
+    showToast("JSON parse error");
+    return false;
+  }
+
   deviceCount = 0;
   deviceOffset = 0;
-  if (!bridgeReady()) {
-    showToast("Set Wi-Fi and Bridge first");
-    return false;
+
+  if (doc.is<JsonArray>()) {
+    for (JsonObject item : doc.as<JsonArray>()) {
+      if (deviceCount >= 20) break;
+      Device& dev = devices[deviceCount++];
+      dev.id = item["deviceid"] | item["id"] | "";
+      dev.name = item["name"] | dev.id;
+      if (item["params"].is<JsonObject>() && item["params"]["switch"].is<const char*>()) {
+        dev.state = item["params"]["switch"].as<String>();
+      } else if (item["state"].is<const char*>()) {
+        dev.state = item["state"].as<String>();
+      } else {
+        dev.state = "off";
+      }
+      String lowerName = dev.name;
+      lowerName.toLowerCase();
+      bool isLight = (lowerName.indexOf("room") >= 0 || lowerName.indexOf("light") >= 0 ||
+                      lowerName.indexOf("corner") >= 0 || lowerName.indexOf("lamp") >= 0);
+      dev.type = isLight ? "light" : (item["type"] | "switch");
+    }
+  } else if (doc["devices"].is<JsonArray>()) {
+    for (JsonObject item : doc["devices"].as<JsonArray>()) {
+      if (deviceCount >= 20) break;
+      Device& dev = devices[deviceCount++];
+      dev.id = item["id"] | item["deviceid"] | "";
+      dev.name = item["name"] | dev.id;
+      dev.type = item["type"] | "switch";
+      dev.state = item["state"] | "off";
+    }
   }
-  showLoading("Loading devices...");
-  HTTPClient request;
-  request.setTimeout(9000);
-  request.begin(bridgeBase() + "/api/v1/devices");
-  addBridgeHeaders(request);
-  int status = request.GET();
-  if (status != HTTP_CODE_OK) {
-    showToast("Bridge error " + String(status));
-    request.end();
-    return false;
-  }
-  JsonDocument document;
-  DeserializationError error = deserializeJson(document, request.getStream());
-  request.end();
-  if (error) {
-    showToast("Invalid bridge response");
-    return false;
-  }
-  for (JsonObject item : document["devices"].as<JsonArray>()) {
-    if (deviceCount >= 20) break;
-    Device& device = devices[deviceCount++];
-    device.id = item["id"] | "";
-    device.name = item["name"] | device.id;
-    device.type = item["type"] | "switch";
-    device.state = item["state"] | "unknown";
-  }
-  if (deviceCount) {
-    showToast(String(deviceCount) + " devices loaded");
+
+  if (deviceCount == 0) {
+    devices[0].id = "100128c304";
+    devices[0].name = "M.room(corner)";
+    devices[0].type = "light";
+    devices[0].state = "off";
+    deviceCount = 1;
+    showToast("Default eWeLink light ready");
   } else {
-    showToast("No supported devices found");
+    showToast(String(deviceCount) + " device(s) synced");
   }
+
   return true;
 }
 
 bool toggleDevice(Device& device) {
   if (!bridgeReady()) {
-    showToast("Bridge offline");
+    showToast("Wi-Fi not connected");
     return false;
   }
-  HTTPClient request;
-  request.setTimeout(9000);
-  request.begin(bridgeBase() + "/api/v1/devices/" + device.id + "/toggle");
-  addBridgeHeaders(request);
-  request.addHeader("Content-Type", "application/json");
-  int status = request.POST("{}");
-  if (status >= 200 && status < 300) {
+
+  String targetId = device.id.length() ? device.id : "100128c304";
+  showToast("Toggling " + device.name + "...");
+
+  // 1. Try eWeLink Cloud action (Apple Shortcut style: POST /api/ewelink/action)
+  String url = bridgeBase() + "/api/ewelink/action";
+  String payload = "{\"deviceid\":\"" + targetId + "\",\"action\":\"turn\"}";
+  String resp;
+  int code = 0;
+
+  bool ok = httpRequest(url, "POST", payload, resp, code);
+
+  if (ok && code >= 200 && code < 300) {
     JsonDocument reply;
-    deserializeJson(reply, request.getStream());
-    device.state = reply["state"] | device.state;
-    showToast(device.name + " toggled");
-    request.end();
+    deserializeJson(reply, resp);
+    if (reply["newState"].is<const char*>()) {
+      device.state = reply["newState"].as<String>();
+    } else {
+      device.state = (device.state == "on" || device.state == "ON") ? "off" : "on";
+    }
+    showToast(device.name + ": " + (device.state == "on" ? "ON" : "OFF"));
     return true;
   }
-  showToast("Control error " + String(status));
-  request.end();
+
+  // 2. Fallback to /api/v1/devices/:id/toggle (Home Hub v1 style)
+  if (code == 404) {
+    url = bridgeBase() + "/api/v1/devices/" + targetId + "/toggle";
+    ok = httpRequest(url, "POST", "{}", resp, code);
+    if (ok && code >= 200 && code < 300) {
+      JsonDocument reply;
+      deserializeJson(reply, resp);
+      if (reply["state"].is<const char*>()) {
+        device.state = reply["state"].as<String>();
+      } else {
+        device.state = (device.state == "on" || device.state == "ON") ? "off" : "on";
+      }
+      showToast(device.name + " toggled");
+      return true;
+    }
+  }
+
+  // 3. Fallback to /api/widget/toggle if available
+  if (code == 404) {
+    url = bridgeBase() + "/api/widget/toggle";
+    ok = httpRequest(url, "GET", "", resp, code);
+    if (ok && code >= 200 && code < 300) {
+      device.state = (device.state == "on" || device.state == "ON") ? "off" : "on";
+      showToast(device.name + " toggled");
+      return true;
+    }
+  }
+
+  showToast("Control error " + String(code));
   return false;
 }
 
 bool testBridge() {
   if (!bridgeReady()) {
-    showToast("Set Wi-Fi and URL first");
+    showToast("Connect Wi-Fi first");
     return false;
   }
-  showLoading("Testing bridge...");
-  HTTPClient request;
-  request.setTimeout(7000);
-  request.begin(bridgeBase() + "/api/v1/status");
-  addBridgeHeaders(request);
-  int status = request.GET();
-  request.end();
-  if (status == HTTP_CODE_OK) {
-    showToast("Bridge connected!");
-  } else {
-    showToast("Bridge error " + String(status));
+  showLoading("Testing Cloud...");
+
+  // Test 1: Check light status
+  String resp;
+  int code = 0;
+  if (httpRequest(bridgeBase() + "/api/status/light", "GET", "", resp, code) && code == 200) {
+    resp.trim();
+    showToast("Cloud OK! Light: " + resp);
+    return true;
   }
-  return status == HTTP_CODE_OK;
+
+  // Test 2: Check general status
+  if (httpRequest(bridgeBase() + "/api/status", "GET", "", resp, code) && code == 200) {
+    showToast("Cloud Online (Ready)");
+    return true;
+  }
+
+  // Test 3: Check /api/v1/status
+  if (httpRequest(bridgeBase() + "/api/v1/status", "GET", "", resp, code) && code == 200) {
+    showToast("Bridge Connected!");
+    return true;
+  }
+
+  showToast("Cloud error " + String(code));
+  return false;
 }
 
 // ----- Wi-Fi --------------------------------------------------------------------
@@ -695,7 +862,7 @@ void finishKeyboard() {
     case KeyboardTarget::BridgeUrl:
       bridgeUrl = keyboardValue;
       saveSettings();
-      showToast("Bridge URL saved");
+      showToast("Cloud URL saved");
       currentPage = Page::Bridge;
       break;
     case KeyboardTarget::BridgeKey:
@@ -794,7 +961,7 @@ void drawHome() {
 
   // 2×2 grid of app cards + settings bar
   // Devices
-  card(12, 44, 145, 58, "Devices", "Home Assistant");
+  card(12, 44, 145, 58, "Devices", "eWeLink Cloud");
   // Wi-Fi
   card(163, 44, 145, 58, "Wi-Fi", wifiStatusText());
   // Bluetooth
@@ -804,7 +971,7 @@ void drawHome() {
 
   // Settings bar at bottom
   card(12, 174, 145, 36, "Settings");
-  card(163, 174, 145, 36, "Web Bridge");
+  card(163, 174, 145, 36, "Cloud API");
 
   // Version footer
   tft.setTextColor(c.muted, c.background);
@@ -815,24 +982,22 @@ void drawHome() {
 void drawDevices() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
-  String status = bridgeReady() ? String(deviceCount) + " devices"
-                                : "BRIDGE OFFLINE";
   drawStatusBar("DEVICES");
 
   if (!deviceCount && !bridgeReady()) {
-    drawEmptyState("[ ]", "No Bridge Connection",
-                   "Set Wi-Fi and Bridge URL first");
+    drawEmptyState("[ ]", "Wi-Fi Offline",
+                   "Connect Wi-Fi in Wi-Fi menu");
     // Refresh and Back at bottom
     card(12, 210, 68, 22, "Back");
-    actionButton(160, 210, 148, 22, "Refresh");
+    actionButton(160, 210, 148, 22, "Sync");
     return;
   }
 
   if (!deviceCount) {
     drawEmptyState("( )", "No Devices",
-                   "Tap Refresh to load from bridge");
+                   "Tap Sync to load from Cloud");
     card(12, 210, 68, 22, "Back");
-    actionButton(160, 210, 148, 22, "Refresh");
+    actionButton(160, 210, 148, 22, "Sync");
     return;
   }
 
@@ -841,7 +1006,7 @@ void drawDevices() {
     uint8_t index = deviceOffset + row;
     if (index >= deviceCount) break;
     Device& device = devices[index];
-    bool on = device.state == "on" || device.state == "open";
+    bool on = (device.state == "on" || device.state == "ON" || device.state == "open");
 
     int cy = 42 + row * 40;
 
@@ -860,7 +1025,7 @@ void drawDevices() {
 
   // Bottom nav
   card(12, 210, 68, 22, "Back");
-  actionButton(86, 210, 68, 22, "Refresh");
+  actionButton(86, 210, 68, 22, "Sync");
 
   // Page indicator
   if (deviceCount > 4) {
@@ -1003,8 +1168,8 @@ void drawSettings() {
   String zone = "UTC" + String(utcOffset >= 0 ? "+" : "") + String(utcOffset);
   card(12, 110, 296, 30, "Timezone", zone + " - tap to change");
 
-  // Bridge shortcut
-  card(12, 144, 296, 30, "Web Bridge",
+  // Cloud API shortcut
+  card(12, 144, 296, 30, "Cloud API",
        bridgeUrl.length() ? trimText(bridgeUrl, 28) : "Not configured");
 
   // Forget Wi-Fi
@@ -1024,41 +1189,39 @@ void drawBridge() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
 
-  String status = bridgeReady() ? "READY" : "SETUP";
-  drawStatusBar("WEB BRIDGE");
+  drawStatusBar("CLOUD API");
 
   // URL field
-  card(12, 42, 296, 40, "Bridge URL",
+  card(12, 42, 296, 40, "Cloud Endpoint",
        bridgeUrl.length() ? trimText(bridgeUrl, 36)
-                          : "Tap to enter http://IP:8787");
+                          : "Tap to enter Cloud URL");
 
-  // Key field
-  card(12, 88, 296, 40, "Access Key",
-       bridgeKey.length() ? "Configured (tap to change)"
-                          : "Optional - tap to set");
+  // Device ID field
+  card(12, 88, 296, 40, "eWeLink Device",
+       "100128c304 (Corner Room)");
 
   // Test button
-  actionButton(12, 134, 296, 36, "Test Connection");
+  actionButton(12, 134, 296, 36, "Test Cloud Connection");
 
   // Status indicator
   if (bridgeReady()) {
     tft.setTextColor(c.success, c.background);
     tft.setTextSize(1);
-    tft.drawCentreString("Bridge URL and Wi-Fi are configured", 160, 180, 1);
+    tft.drawCentreString("Direct Cloud API (No PC Needed)", 160, 180, 1);
   } else {
     tft.setTextColor(c.muted, c.background);
     tft.setTextSize(1);
     if (WiFi.status() != WL_CONNECTED) {
       tft.drawCentreString("Connect Wi-Fi first", 160, 180, 1);
     } else {
-      tft.drawCentreString("Enter your bridge server address", 160, 180, 1);
+      tft.drawCentreString("Enter your cloud server address", 160, 180, 1);
     }
   }
 
   // Architecture note
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
-  tft.drawCentreString("Sonoff > HA > Bridge > CYD", 160, 196, 1);
+  tft.drawCentreString("CYD -> Render Cloud -> eWeLink", 160, 196, 1);
 
   card(12, 214, 68, 22, "Back");
 }
@@ -1239,9 +1402,9 @@ void handleTap(int x, int y) {
     }
   } else if (currentPage == Page::Bridge) {
     if (y >= 42 && y < 82) {
-      startKeyboard(KeyboardTarget::BridgeUrl, "BRIDGE URL", bridgeUrl, false);
+      startKeyboard(KeyboardTarget::BridgeUrl, "CLOUD URL", bridgeUrl, false);
     } else if (y >= 88 && y < 128) {
-      startKeyboard(KeyboardTarget::BridgeKey, "ACCESS KEY", bridgeKey, true);
+      showToast("Device: 100128c304");
     } else if (y >= 134 && y < 170) {
       testBridge();
       pageNeedsRedraw = true;

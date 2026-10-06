@@ -4,39 +4,42 @@ A touch-first, dark-themed 320×240 smart home controller for the **ESP32-2432S0
 
 ---
 
-## What's New in Version 2.0.1 (Latest)
+## What's New in Version 2.0.2 (Direct Cloud Edition)
 
-1. **Instant Touch Response (Zero-Deadzone Keyboard)**:
+1. **Zero 3rd Devices — Direct Cloud eWeLink Integration**:
+   - **No PC, Raspberry Pi, or local bridge required!** The CYD connects directly over Wi-Fi to your existing Render cloud endpoint: `https://bott-r34h.onrender.com`.
+   - Built-in Apple Shortcut style URL: `POST /api/ewelink/action` with `{ "deviceid": "100128c304", "action": "turn" }`.
+   - Default primary device `100128c304` (*"M.room(corner)"*) is pre-configured and ready immediately.
+   - HTTPS communication via `WiFiClientSecure` with automatic TLS heap cleanup.
+2. **Instant Touch Response (Zero-Deadzone Keyboard)**:
    - Fixed resistive touch debouncing with rapid 250 Hz sampling (`delay(4)` loop) and 2.5ms settle delay.
    - Continuous horizontal and vertical touch hit-testing: every tap anywhere in a key row maps to the nearest key—**zero dead zones between buttons or along margins**.
    - Keystrokes redraw only the input field (`drawTextInput()`), delivering instant, zero-lag character updates.
-2. **Wi-Fi Password Visibility**:
+3. **Wi-Fi Password Visibility**:
    - Added a prominent **`[SHOW]` / `[HIDE]`** toggle button on the keyboard.
    - By default on Wi-Fi password entry, passwords are **visible** so you can easily verify every character and avoid typos.
-3. **Rock-Solid Wi-Fi Connection Manager**:
+4. **Rock-Solid Wi-Fi Connection Manager**:
    - 19.5 dBm maximum RF transmit power (`WiFi.setTxPower(WIFI_POWER_19_5dBm)`) to eliminate radio brownout.
    - ESP32 hardware event monitoring (`WiFi.onEvent`) providing instant feedback for wrong passwords (`AUTH_FAIL`, `4WAY_HANDSHAKE_TIMEOUT`) and out-of-range networks.
    - Persistent NVS credentials with automatic reconnection on boot.
-4. **eWeLink & Sonoff Native Support**:
-   - Direct integration with local **mwaqqp** server (`http://<PC_IP>:3000`) or the standalone bridge (`http://<PC_IP>:8787`).
-   - Automatically loads switches and lights from eWeLink without vendor OAuth on the ESP32.
-   - Also supports Home Assistant seamlessly.
 5. **Verified 4-Part Browser Flasher**:
    - Ready to flash via Chrome/Edge from `web/index.html` with correct ESP32 offsets (`bootloader` at 0x1000, `partitions` at 0x8000, `boot_app0` at 0xE000, `cyd-home.bin` at 0x10000).
 
 ---
 
-## Architecture
+## Architecture (Direct Cloud — No PC Needed)
 
 ```
 Sonoff / eWeLink Devices
-          ↓
-Local Node.js Bridge or mwaqqp Dashboard (Port 3000 or 8787 on your PC)
-          ↓ (LAN JSON API)
-CYD ESP32 Touchscreen (CYD Home Hub V2)
+          ▲
+          │ (eWeLink Cloud)
+Render Cloud Service (https://bott-r34h.onrender.com)
+          ▲
+          │ (HTTPS REST API / Apple Shortcut action)
+ESP32 CYD Touchscreen (CYD Home Hub V2)
 ```
 
-No cloud passwords or OAuth secrets are stored on the CYD. The CYD simply talks to your local LAN bridge.
+No local PC, no Raspberry Pi, and no 3rd device needed! The CYD talks directly to the cloud service over your Wi-Fi router.
 
 ---
 
@@ -66,11 +69,10 @@ No cloud passwords or OAuth secrets are stored on the CYD. The CYD simply talks 
 - The on-screen keyboard opens with **`SHOW`** mode enabled by default: you can see exactly what you type!
 - Tap **JOIN**. If the password was wrong, the device will immediately warn you. Once connected, your IP is displayed.
 
-### 3. Connect eWeLink Devices
-- In your computer's terminal:
-  - If using your existing **mwaqqp** server: start it with `npm start` (it runs on port 3000).
-  - If using the standalone bridge: run `node bridge/bridge.js` (runs on port 8787).
-- On the CYD, tap **Settings** → **Web Bridge**.
-- Tap **Bridge URL** and enter `http://<YOUR_COMPUTER_IP>:3000` (or `:8787`).
-- Tap **Test Connection** → "Bridge connected!".
-- Tap **Back** → **Devices** to view and toggle your Sonoff/eWeLink devices!
+### 3. Direct eWeLink Control (Zero Configuration!)
+- **No PC or 3rd device needed!**
+- The CYD is already pre-configured to connect to `https://bott-r34h.onrender.com`.
+- Device `100128c304` (*"M.room(corner)"*) is already built in.
+- Simply tap **Devices** on the CYD home screen:
+  - The CYD automatically syncs your devices from the cloud over Wi-Fi.
+  - Tap any device card to toggle it ON/OFF via the Apple Shortcut action API!

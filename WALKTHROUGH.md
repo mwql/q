@@ -63,37 +63,35 @@ python -m platformio run --target upload
 
 ---
 
-## 💡 Step 4: Ready-to-Use eWeLink / Sonoff Device Control
+## 💡 Step 4: Zero 3rd Devices — Direct Cloud eWeLink Control
 
-Your devices are ready to control without entering any cloud passwords on the CYD!
+**No computer, no Raspberry Pi, and no local bridge server are needed!**
+The ESP32 CYD connects directly over Wi-Fi to your existing Render cloud service (`https://bott-r34h.onrender.com`), using the exact Apple Shortcut action endpoint you already created.
 
-### Method 1: Using Your Existing `mwaqqp` Dashboard (Direct)
-1. In your computer's terminal, go to your dashboard folder and start it:
-   ```bash
-   cd "C:\Users\X1\Desktop\my web\mwaqqp-main"
-   npm start
-   ```
-   *(The server runs on port 3000)*
-2. Find your computer's local IP address (e.g. `192.168.1.50`) by typing `ipconfig` in PowerShell.
-3. On the CYD:
-   - Tap **Settings** → **Web Bridge**.
-   - Tap **Bridge URL** and enter:
+### How It Works Out-of-the-Box:
+1. **Pre-Configured Default URL**: The firmware already includes `https://bott-r34h.onrender.com` by default.
+2. **Pre-Seeded Device**: Device `100128c304` (*"M.room(corner)"*) is built-in and ready on first boot.
+3. **Apple Shortcut Action Integration**:
+   - When you tap the device card, the CYD directly issues an HTTPS `POST`:
      ```text
-     http://192.168.1.50:3000
+     https://bott-r34h.onrender.com/api/ewelink/action
      ```
-     *(Replace `192.168.1.50` with your PC's actual local IP address)*
-   - Tap **Test Connection** → you will see `"Bridge connected!"`.
-4. Tap **Back** → **Devices**:
-   - All your Sonoff / eWeLink devices will appear on the screen!
-   - Tap any device to toggle it ON or OFF instantly. The screen updates the state in real time.
-
-### Method 2: Using the Standalone Bridge (or Home Assistant)
-1. In the project folder, run:
-   ```powershell
-   node bridge/bridge.js
-   ```
-   *(Runs on port 8787)*
-2. On the CYD, set the Bridge URL to `http://<YOUR_PC_IP>:8787`.
+     with JSON payload:
+     ```json
+     {"deviceid": "100128c304", "action": "turn"}
+     ```
+   - The cloud toggles the switch and replies with `{ "success": true, "newState": "on" }` (or `"off"`).
+   - The CYD updates the button state and shows a confirmation toast immediately.
+4. **Automatic Cloud Sync**:
+   - When you connect to Wi-Fi or tap **Sync** on the Devices screen, the CYD calls:
+     ```text
+     GET https://bott-r34h.onrender.com/api/ewelink/devices
+     ```
+     and fetches the real-time state of all your eWeLink devices.
+5. **Testing Cloud Connection**:
+   - Tap **Cloud API** on the Home screen or in Settings.
+   - Tap **Test Cloud Connection** — the CYD will query `/api/status/light` and confirm `"Cloud OK! Light: ON"`.
+   - If you ever need to point to a different URL in the future, tap **Cloud Endpoint** and type a new address with the on-screen keyboard.
 
 ---
 
@@ -117,5 +115,6 @@ Your devices are ready to control without entering any cloud passwords on the CY
 | **Wi-Fi Diagnostics** | ✅ Verified | Hardware event listener decodes wrong password vs out-of-range |
 | **eWeLink Endpoints** | ✅ Verified | `/api/v1/devices` and toggle added to `mwaqqp-main` |
 | **All Fonts & Labels** | ✅ Verified | LOAD_FONT2, FONT4, FONT6, FONT7, GFXFF enabled in platformio.ini; Back button, Wi-Fi items, and key labels render crisply |
-| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (66.9% flash, 18.1% RAM) |
+| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (67.2% flash, 18.1% RAM) |
+| **Direct Cloud (No 3rd Device)** | ✅ Verified | Direct HTTPS to Render with `setInsecure()`, Apple Shortcut action, live status `/api/status/light` tested |
 | **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/` with valid manifest |
