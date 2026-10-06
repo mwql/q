@@ -1432,8 +1432,6 @@ void handleTap(int x, int y) {
     } else if (y >= 214) {
       navigateTo(Page::Settings);
     }
-  }
-
   } else if (currentPage == Page::Fun) {
     if (y >= 42 && y < 82) {
       if (x < 160) showToast("Starting WiFi IDS...");
