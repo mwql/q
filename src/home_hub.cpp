@@ -1,233 +1,606 @@
-// CYD Home Hub — TPM408-2.8 / ESP32-2432S028R
-// Display and touch configuration follows a tested TPM408 CYD reference.
+// CYD Home Hub 2.0
+// A touch-first controller for the TPM408-2.8 / ESP32-2432S028R.
+// The CYD contains no cloud account password: a local Web Bridge owns the
+// Home Assistant/eWeLink connection and exposes only device data and commands.
+
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 #include <TFT_Touch.h>
 #include <WiFi.h>
-#include <WiFiManager.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <NimBLEDevice.h>
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
+#include <time.h>
+#include <cstring>
+#include "board_config.h"
+#include "theme.h"
 
-namespace Board {
-constexpr uint16_t WIDTH = 320, HEIGHT = 240;
-constexpr uint16_t LIGHT_BLUE = 0x9E7F;
-constexpr uint8_t TOUCH_DOUT = 39, TOUCH_DIN = 32, TOUCH_CS = 33, TOUCH_CLK = 25;
-constexpr uint8_t IR_PIN = 27;
-constexpr uint32_t SLEEP_MS = 10000;
-}
+namespace {
 
-TFT_eSPI screen;
-TFT_Touch touch(Board::TOUCH_CS, Board::TOUCH_CLK, Board::TOUCH_DIN, Board::TOUCH_DOUT);
-Preferences store;
-IRsend irsend(Board::IR_PIN);
+enum class Page : uint8_t { Home, Devices, Wifi, Keyboard, Bluetooth, Infrared, Settings, Bridge };
+enum class KeyboardTarget : uint8_t { None, WifiPassword, BridgeUrl, BridgeKey, IrCode };
+enum class KeyboardMode : uint8_t { Lower, Upper, Symbols };
 
-enum class AppPage : uint8_t { Home, Devices, WiFi, Bluetooth, Infrared, System };
-struct Device { String id, name, domain, state; };
+struct Device {
+  String id;
+  String name;
+  String type;
+  String state;
+};
 
-AppPage page = AppPage::Home;
-Device devices[16];
-uint8_t deviceCount = 0, deviceOffset = 0;
-String haUrl, haToken, irCodeText = "20DF10EF";
-String notice = "Ready";
-String bleNames[4];
+TFT_eSPI tft;
+TFT_Touch touch(Board::kTouchCs, Board::kTouchClock, Board::kTouchDin, Board::kTouchDout);
+Preferences preferences;
+IRsend irsend(Board::kIrPin);
+
+Page page = Page::Home;
+KeyboardTarget keyboardTarget = KeyboardTarget::None;
+KeyboardMode keyboardMode = KeyboardMode::Lower;
+bool touchDown = false;
+bool displaySleeping = false;
+bool wifiConnecting = false;
+bool keyboardSecret = false;
+uint8_t themeIndex = 0;
+uint8_t sleepIndex = 0;
+int8_t utcOffset = 0;
+uint8_t wifiOffset = 0;
+uint8_t deviceOffset = 0;
+uint8_t deviceCount = 0;
 uint8_t bleCount = 0;
-bool displayAsleep = false;
 uint32_t lastInteraction = 0;
+uint32_t wifiConnectStarted = 0;
+bool ntpStarted = false;
 
-// ----- Drawing: white and light-blue only ------------------------------------
-void setInk(uint16_t foreground = Board::LIGHT_BLUE, uint16_t background = TFT_WHITE) {
-  screen.setTextColor(foreground, background);
-}
-void header(const String& title, const String& right = "") {
-  screen.fillScreen(TFT_WHITE);
-  screen.fillRect(0, 0, Board::WIDTH, 38, Board::LIGHT_BLUE);
-  screen.setTextColor(TFT_WHITE, Board::LIGHT_BLUE);
-  screen.setTextSize(2);
-  screen.drawString(title, 12, 11, 2);
-  if (right.length()) { screen.setTextSize(1); screen.drawRightString(right, 309, 14, 1); }
-}
-void button(int x, int y, int w, int h, const String& name, const String& detail = "") {
-  screen.drawRoundRect(x, y, w, h, 8, Board::LIGHT_BLUE);
-  setInk(); screen.setTextSize(2); screen.drawCentreString(name, x + w / 2, y + 8, 2);
-  if (detail.length()) { screen.setTextSize(1); screen.drawCentreString(detail, x + w / 2, y + h - 16, 1); }
-}
-void splash(const String& line) { header("CYD HOME"); setInk();screen.setTextSize(2);screen.drawCentreString(line,160,112,2); }
+String notice = "Ready";
+String selectedSsid;
+String keyboardTitle;
+String keyboardValue;
+String bridgeUrl;
+String bridgeKey;
+String irCode = "20DF10EF";
+String wifiNames[12];
+int32_t wifiRssi[12];
+uint8_t wifiCount = 0;
+String bleNames[4];
+Device devices[20];
 
-// ----- Settings ----------------------------------------------------------------
-void loadSettings() {
-  store.begin("cydhub", false);
-  haUrl = store.getString("ha_url", "");
-  haToken = store.getString("ha_token", "");
-  irCodeText = store.getString("ir_nec", "20DF10EF");
-}
+constexpr uint32_t kSleepChoices[] = {10000, 30000, 60000, 0};
+constexpr char kLowerRows[][11] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
+constexpr char kUpperRows[][11] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
+constexpr char kSymbolRows[][11] = {"1234567890", "-_.:/@#", "!?$%&*+="};
+
+const Theme& theme() { return kThemes[themeIndex % kThemeCount]; }
+uint32_t sleepTimeout() { return kSleepChoices[sleepIndex % 4]; }
+
+// ----- Settings persistence ------------------------------------------------------
 void saveSettings() {
-  store.putString("ha_url", haUrl);
-  store.putString("ha_token", haToken);
-  store.putString("ir_nec", irCodeText);
+  preferences.putUChar("theme", themeIndex);
+  preferences.putUChar("sleep", sleepIndex);
+  preferences.putChar("utc_offset", utcOffset);
+  preferences.putString("bridge_url", bridgeUrl);
+  preferences.putString("bridge_key", bridgeKey);
+  preferences.putString("ir_code", irCode);
 }
 
-// ----- Home Assistant ----------------------------------------------------------
-bool configured() { return WiFi.isConnected() && haUrl.length() && haToken.length(); }
-String apiBase() { String base = haUrl; while (base.endsWith("/")) base.remove(base.length() - 1); return base + "/api"; }
-bool fetchDevices() {
-  deviceCount = 0; deviceOffset = 0;
-  if (!configured()) { notice = "Set Wi-Fi and Home Assistant first"; return false; }
-  splash("Loading devices...");
-  HTTPClient http;
-  http.setTimeout(9000);
-  http.begin(apiBase() + "/states");
-  http.addHeader("Authorization", "Bearer " + haToken);
-  int response = http.GET();
-  if (response != HTTP_CODE_OK) { notice = "Home Assistant error " + String(response); http.end(); return false; }
-  JsonDocument filter;
-  filter[0]["entity_id"] = true;
-  filter[0]["state"] = true;
-  filter[0]["attributes"]["friendly_name"] = true;
-  JsonDocument data;
-  DeserializationError error = deserializeJson(data, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
-  if (error) { notice = "Could not read device list"; return false; }
-  for (JsonObject item : data.as<JsonArray>()) {
-    String id = item["entity_id"] | "";
-    int dot = id.indexOf('.'); if (dot <= 0) continue;
-    String domain = id.substring(0, dot);
-    if (!(domain == "switch" || domain == "light" || domain == "fan" || domain == "cover")) continue;
-    if (deviceCount == 16) break;
-    Device& d = devices[deviceCount++];
-    d.id = id; d.domain = domain; d.name = item["attributes"]["friendly_name"] | id; d.state = item["state"] | "unknown";
+void loadSettings() {
+  preferences.begin("cydhub2", false);
+  themeIndex = preferences.getUChar("theme", 0);
+  sleepIndex = preferences.getUChar("sleep", 0);
+  utcOffset = preferences.getChar("utc_offset", 0);
+  bridgeUrl = preferences.getString("bridge_url", "");
+  bridgeKey = preferences.getString("bridge_key", "");
+  irCode = preferences.getString("ir_code", "20DF10EF");
+  if (themeIndex >= kThemeCount) themeIndex = 0;
+  if (sleepIndex > 3) sleepIndex = 0;
+  if (utcOffset < -12 || utcOffset > 14) utcOffset = 0;
+}
+
+// ----- UI primitives -------------------------------------------------------------
+String trimText(const String& value, size_t limit) {
+  if (value.length() <= limit) return value;
+  return value.substring(0, limit > 3 ? limit - 3 : limit) + "...";
+}
+
+void header(const String& title, const String& status = "") {
+  const Theme& c = theme();
+  tft.fillScreen(c.background);
+  tft.fillRect(0, 0, Board::kWidth, 40, c.header);
+  tft.setTextColor(c.text, c.header);
+  tft.setTextSize(2);
+  tft.drawString(title, 12, 12, 2);
+  if (status.length()) {
+    tft.setTextSize(1);
+    tft.drawRightString(status, 308, 15, 1);
   }
-  notice = deviceCount ? String(deviceCount) + " devices loaded" : "No supported devices found";
+}
+
+void card(int x, int y, int w, int h, const String& title, const String& detail = "", bool selected = false) {
+  const Theme& c = theme();
+  uint16_t fill = selected ? c.surfaceRaised : c.surface;
+  tft.fillRoundRect(x, y, w, h, 8, fill);
+  tft.drawRoundRect(x, y, w, h, 8, c.accent);
+  tft.setTextColor(c.text, fill);
+  if (h >= 44) {
+    tft.setTextSize(2);
+    tft.drawCentreString(trimText(title, 19), x + w / 2, y + 8, 2);
+    if (detail.length()) { tft.setTextColor(c.muted, fill); tft.setTextSize(1); tft.drawCentreString(trimText(detail, 43), x + w / 2, y + h - 15, 1); }
+  } else {
+    tft.setTextSize(1);
+    tft.drawString(trimText(title, 19), x + 8, y + (h - 8) / 2, 1);
+    if (detail.length()) { tft.setTextColor(c.muted, fill); tft.drawRightString(trimText(detail, 26), x + w - 8, y + (h - 8) / 2, 1); }
+  }
+}
+
+void toast(const String& message) {
+  const Theme& c = theme();
+  tft.fillRoundRect(12, 204, 296, 25, 6, c.surfaceRaised);
+  tft.drawRoundRect(12, 204, 296, 25, 6, c.accent);
+  tft.setTextColor(c.text, c.surfaceRaised);
+  tft.setTextSize(1);
+  tft.drawCentreString(trimText(message, 47), 160, 212, 1);
+}
+
+void loading(const String& title) {
+  header("CYD HOME");
+  const Theme& c = theme();
+  tft.setTextColor(c.text, c.background);
+  tft.setTextSize(2);
+  tft.drawCentreString(title, 160, 104, 2);
+  tft.setTextColor(c.muted, c.background);
+  tft.setTextSize(1);
+  tft.drawCentreString("Please wait", 160, 140, 1);
+}
+
+String wifiStatusText() {
+  if (WiFi.status() == WL_CONNECTED) return WiFi.SSID();
+  if (wifiConnecting) return "Connecting...";
+  return "Wi-Fi offline";
+}
+
+void startClock() {
+  if (ntpStarted || WiFi.status() != WL_CONNECTED) return;
+  configTime(utcOffset * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  ntpStarted = true;
+}
+
+String clockText() {
+  struct tm localTime;
+  if (!getLocalTime(&localTime, 5)) return "";
+  char value[6];
+  strftime(value, sizeof(value), "%H:%M", &localTime);
+  return value;
+}
+
+// ----- Web Bridge client ---------------------------------------------------------
+String bridgeBase() {
+  String base = bridgeUrl;
+  while (base.endsWith("/")) base.remove(base.length() - 1);
+  return base;
+}
+
+bool bridgeReady() { return WiFi.status() == WL_CONNECTED && bridgeUrl.length() > 7; }
+
+void addBridgeHeaders(HTTPClient& request) {
+  request.addHeader("Accept", "application/json");
+  if (bridgeKey.length()) request.addHeader("X-CYD-Key", bridgeKey);
+}
+
+bool fetchDevices() {
+  deviceCount = 0;
+  deviceOffset = 0;
+  if (!bridgeReady()) { notice = "Set Wi-Fi and Web Bridge first"; return false; }
+  loading("Getting devices...");
+  HTTPClient request;
+  request.setTimeout(9000);
+  request.begin(bridgeBase() + "/api/v1/devices");
+  addBridgeHeaders(request);
+  int status = request.GET();
+  if (status != HTTP_CODE_OK) { notice = "Web Bridge error " + String(status); request.end(); return false; }
+  JsonDocument document;
+  DeserializationError error = deserializeJson(document, request.getStream());
+  request.end();
+  if (error) { notice = "Invalid Web Bridge response"; return false; }
+  for (JsonObject item : document["devices"].as<JsonArray>()) {
+    if (deviceCount >= 20) break;
+    Device& device = devices[deviceCount++];
+    device.id = item["id"] | "";
+    device.name = item["name"] | device.id;
+    device.type = item["type"] | "switch";
+    device.state = item["state"] | "unknown";
+  }
+  notice = deviceCount ? String(deviceCount) + " devices ready" : "No supported devices on the Web Bridge";
   return true;
 }
-bool sendDeviceCommand(Device& d) {
-  if (!configured()) return false;
-  bool currentlyOn = d.state == "on" || d.state == "open";
-  String service;
-  if (d.domain == "cover") service = currentlyOn ? "close_cover" : "open_cover";
-  else service = currentlyOn ? "turn_off" : "turn_on";
-  HTTPClient http;
-  http.setTimeout(9000);
-  http.begin(apiBase() + "/services/" + d.domain + "/" + service);
-  http.addHeader("Authorization", "Bearer " + haToken);
-  http.addHeader("Content-Type", "application/json");
-  int response = http.POST("{\"entity_id\":\"" + d.id + "\"}");
-  http.end();
-  if (response >= 200 && response < 300) { d.state = currentlyOn ? (d.domain == "cover" ? "closed" : "off") : (d.domain == "cover" ? "open" : "on"); notice = d.name + " updated"; return true; }
-  notice = "Control failed: " + String(response); return false;
+
+bool toggleDevice(Device& device) {
+  if (!bridgeReady()) { notice = "Web Bridge is offline"; return false; }
+  HTTPClient request;
+  request.setTimeout(9000);
+  request.begin(bridgeBase() + "/api/v1/devices/" + device.id + "/toggle");
+  addBridgeHeaders(request);
+  request.addHeader("Content-Type", "application/json");
+  int status = request.POST("{}");
+  if (status >= 200 && status < 300) {
+    JsonDocument reply;
+    deserializeJson(reply, request.getStream());
+    device.state = reply["state"] | device.state;
+    notice = device.name + " updated";
+    request.end();
+    return true;
+  }
+  notice = "Control error " + String(status);
+  request.end();
+  return false;
 }
 
-// ----- Wi-Fi -------------------------------------------------------------------
-void openSetupPortal() {
-  WiFiManager manager;
-  WiFiManagerParameter urlParam("ha_url", "Home Assistant URL", haUrl.c_str(), 120);
-  WiFiManagerParameter tokenParam("ha_token", "Home Assistant token", haToken.c_str(), 255);
-  WiFiManagerParameter irParam("ir_nec", "IR NEC code (hex)", irCodeText.c_str(), 16);
-  manager.addParameter(&urlParam); manager.addParameter(&tokenParam); manager.addParameter(&irParam);
-  manager.setConfigPortalTimeout(180);
-  header("WI-FI SETUP"); setInk();
-  screen.drawCentreString("Join CYD-Home", 160, 96, 2);
-  screen.setTextSize(1); screen.drawCentreString("Then open 192.168.4.1", 160, 132, 1);
-  manager.startConfigPortal("CYD-Home");
-  haUrl = urlParam.getValue(); haToken = tokenParam.getValue(); irCodeText = irParam.getValue(); saveSettings();
-  notice = WiFi.isConnected() ? "Setup saved" : "Setup cancelled";
+bool testBridge() {
+  if (!bridgeReady()) { notice = "Connect Wi-Fi and set URL"; return false; }
+  loading("Testing Web Bridge...");
+  HTTPClient request;
+  request.setTimeout(7000);
+  request.begin(bridgeBase() + "/api/v1/status");
+  addBridgeHeaders(request);
+  int status = request.GET();
+  request.end();
+  notice = status == HTTP_CODE_OK ? "Web Bridge connected" : "Web Bridge error " + String(status);
+  return status == HTTP_CODE_OK;
 }
 
-// ----- Bluetooth ----------------------------------------------------------------
-class ScannerCallbacks : public NimBLEScanCallbacks {
-  void onResult(const NimBLEAdvertisedDevice* found) override {
+// ----- Wi-Fi --------------------------------------------------------------------
+void scanWifi() {
+  loading("Scanning Wi-Fi...");
+  wifiCount = 0;
+  wifiOffset = 0;
+  int count = WiFi.scanNetworks(false, true);
+  for (int i = 0; i < count && wifiCount < 12; ++i) {
+    String ssid = WiFi.SSID(i);
+    if (!ssid.length()) continue;
+    bool duplicate = false;
+    for (uint8_t known = 0; known < wifiCount; ++known) if (wifiNames[known] == ssid) duplicate = true;
+    if (duplicate) continue;
+    wifiNames[wifiCount] = ssid;
+    wifiRssi[wifiCount] = WiFi.RSSI(i);
+    ++wifiCount;
+  }
+  WiFi.scanDelete();
+  notice = wifiCount ? String(wifiCount) + " networks found" : "No Wi-Fi networks found";
+}
+
+void connectWifi(const String& password) {
+  WiFi.disconnect();
+  WiFi.begin(selectedSsid.c_str(), password.c_str());
+  wifiConnecting = true;
+  wifiConnectStarted = millis();
+  notice = "Connecting to " + selectedSsid;
+}
+
+void pollWifi() {
+  if (!wifiConnecting) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnecting = false;
+    startClock();
+    notice = "Connected: " + WiFi.localIP().toString();
+  } else if (millis() - wifiConnectStarted > 18000) {
+    wifiConnecting = false;
+    notice = "Wi-Fi connection timed out";
+  }
+}
+
+// ----- Bluetooth and infrared ---------------------------------------------------
+class ScanCallbacks : public NimBLEScanCallbacks {
+  void onResult(const NimBLEAdvertisedDevice* advertised) override {
     if (bleCount >= 4) return;
-    String name = found->getName().c_str();
-    if (!name.length()) name = found->getAddress().toString().c_str();
+    String name = advertised->getName().c_str();
+    if (!name.length()) name = advertised->getAddress().toString().c_str();
     bleNames[bleCount++] = name;
   }
-} scannerCallbacks;
+} scanCallbacks;
+
 void scanBluetooth() {
-  bleCount = 0; splash("Scanning Bluetooth...");
+  loading("Scanning Bluetooth...");
+  bleCount = 0;
   NimBLEScan* scanner = NimBLEDevice::getScan();
-  scanner->clearResults(); scanner->setActiveScan(true); scanner->setMaxResults(0);
+  scanner->clearResults();
+  scanner->setActiveScan(true);
+  scanner->setMaxResults(0);
   scanner->start(5, false, true);
-  notice = bleCount ? String(bleCount) + " nearby devices" : "No BLE devices found";
+  notice = bleCount ? String(bleCount) + " nearby devices" : "No Bluetooth devices found";
 }
 
-// ----- Infrared -----------------------------------------------------------------
 void sendInfrared() {
   char* end = nullptr;
-  uint32_t code = strtoul(irCodeText.c_str(), &end, 16);
-  if (!irCodeText.length() || (end && *end)) { notice = "Invalid IR hexadecimal code"; return; }
+  uint32_t code = strtoul(irCode.c_str(), &end, 16);
+  if (!irCode.length() || (end && *end)) { notice = "IR code must be hexadecimal"; return; }
   irsend.sendNEC(code, 32);
   notice = "IR code sent";
 }
 
+// ----- Keyboard -----------------------------------------------------------------
+void startKeyboard(KeyboardTarget target, const String& title, const String& value, bool secret) {
+  keyboardTarget = target;
+  keyboardTitle = title;
+  keyboardValue = value;
+  keyboardSecret = secret;
+  keyboardMode = KeyboardMode::Lower;
+  page = Page::Keyboard;
+}
+
+const char* keyboardRow(uint8_t row) {
+  if (keyboardMode == KeyboardMode::Upper) return kUpperRows[row];
+  if (keyboardMode == KeyboardMode::Symbols) return kSymbolRows[row];
+  return kLowerRows[row];
+}
+
+String displayKeyboardValue() {
+  if (!keyboardSecret) return trimText(keyboardValue, 35);
+  String masked;
+  for (size_t i = 0; i < keyboardValue.length(); ++i) masked += '*';
+  return masked;
+}
+
+void drawKeyRow(const char* characters, int y) {
+  const Theme& c = theme();
+  int count = strlen(characters);
+  int width = (300 - (count - 1) * 2) / count;
+  int left = 10 + (300 - (width * count + (count - 1) * 2)) / 2;
+  for (int i = 0; i < count; ++i) {
+    int x = left + i * (width + 2);
+    tft.fillRoundRect(x, y, width, 25, 4, c.surfaceRaised);
+    tft.drawRoundRect(x, y, width, 25, 4, c.accent);
+    tft.setTextColor(c.text, c.surfaceRaised);
+    tft.setTextSize(1);
+    tft.drawCentreString(String(characters[i]), x + width / 2, y + 8, 1);
+  }
+}
+
+void drawKeyboard() {
+  header(keyboardTitle, keyboardMode == KeyboardMode::Symbols ? "123" : keyboardMode == KeyboardMode::Upper ? "ABC" : "abc");
+  const Theme& c = theme();
+  tft.fillRoundRect(10, 48, 300, 34, 5, c.surfaceRaised);
+  tft.drawRoundRect(10, 48, 300, 34, 5, c.accent);
+  tft.setTextColor(c.text, c.surfaceRaised);
+  tft.setTextSize(1);
+  tft.drawString(displayKeyboardValue(), 18, 61, 1);
+  drawKeyRow(keyboardRow(0), 91);
+  drawKeyRow(keyboardRow(1), 120);
+  drawKeyRow(keyboardRow(2), 149);
+  card(10, 184, 48, 35, "aA", "123");
+  card(63, 184, 83, 35, "Space");
+  card(151, 184, 43, 35, "Del");
+  card(199, 184, 51, 35, "Back");
+  card(255, 184, 55, 35, keyboardTarget == KeyboardTarget::WifiPassword ? "Join" : "Save");
+}
+
+bool appendKeyboardCharFromRow(const char* characters, int tapX, int y) {
+  int count = strlen(characters);
+  int width = (300 - (count - 1) * 2) / count;
+  int left = 10 + (300 - (width * count + (count - 1) * 2)) / 2;
+  for (int i = 0; i < count; ++i) {
+    int x = left + i * (width + 2);
+    if (tapX >= x && tapX <= x + width) { keyboardValue += characters[i]; return true; }
+  }
+  return false;
+}
+
+void finishKeyboard() {
+  switch (keyboardTarget) {
+    case KeyboardTarget::WifiPassword: connectWifi(keyboardValue); page = Page::Wifi; break;
+    case KeyboardTarget::BridgeUrl: bridgeUrl = keyboardValue; saveSettings(); notice = "Bridge URL saved"; page = Page::Bridge; break;
+    case KeyboardTarget::BridgeKey: bridgeKey = keyboardValue; saveSettings(); notice = "Bridge key saved"; page = Page::Bridge; break;
+    case KeyboardTarget::IrCode: irCode = keyboardValue; saveSettings(); notice = "IR code saved"; page = Page::Infrared; break;
+    default: page = Page::Home; break;
+  }
+  keyboardTarget = KeyboardTarget::None;
+}
+
+void handleKeyboardTap(int x, int y) {
+  if (y >= 91 && y < 116) appendKeyboardCharFromRow(keyboardRow(0), x, y);
+  else if (y >= 120 && y < 145) appendKeyboardCharFromRow(keyboardRow(1), x, y);
+  else if (y >= 149 && y < 174) appendKeyboardCharFromRow(keyboardRow(2), x, y);
+  else if (y >= 184 && y <= 219) {
+    if (x < 58) keyboardMode = static_cast<KeyboardMode>((static_cast<uint8_t>(keyboardMode) + 1) % 3);
+    else if (x < 146) keyboardValue += ' ';
+    else if (x < 194 && keyboardValue.length()) keyboardValue.remove(keyboardValue.length() - 1);
+    else if (x < 250) { page = keyboardTarget == KeyboardTarget::WifiPassword ? Page::Wifi : Page::Bridge; keyboardTarget = KeyboardTarget::None; }
+    else finishKeyboard();
+  }
+}
+
 // ----- Pages --------------------------------------------------------------------
 void drawHome() {
-  header("CYD HOME", WiFi.isConnected() ? "Wi-Fi" : "Offline");
-  button(12, 52, 140, 52, "Devices", "Sonoff / eWeLink");
-  button(168, 52, 140, 52, "Wi-Fi", "Setup & status");
-  button(12, 116, 140, 52, "Bluetooth", "BLE discovery");
-  button(168, 116, 140, 52, "IR Remote", "NEC transmitter");
-  button(12, 180, 296, 34, "System", "Status and settings");
+  String homeStatus = WiFi.status() == WL_CONNECTED ? "ONLINE" : "OFFLINE";
+  String time = clockText(); if (time.length()) homeStatus += " " + time;
+  header("CYD HOME", homeStatus);
+  card(12, 52, 140, 62, "Devices", "Web Bridge controls");
+  card(168, 52, 140, 62, "Wi-Fi", wifiStatusText());
+  card(12, 124, 140, 62, "Bluetooth", "Discover nearby");
+  card(168, 124, 140, 62, "IR Remote", "Send NEC codes");
+  card(12, 196, 296, 32, "Settings", "Look, sleep, bridge");
 }
-void drawDevices() {
-  header("DEVICES", String(deviceCount) + " found");
-  if (!deviceCount) { button(12, 65, 296, 52, "Refresh devices", notice); button(12, 180, 140, 34, "Back"); return; }
-  for (uint8_t i = 0; i < 4; ++i) {
-    uint8_t index = deviceOffset + i; if (index >= deviceCount) break;
-    Device& d = devices[index];
-    button(12, 47 + i * 42, 296, 38, d.name, d.state == "on" || d.state == "open" ? "ON — tap to turn off" : "OFF — tap to turn on");
-  }
-  button(12, 216, 66, 20, "Back"); button(88, 216, 70, 20, "Refresh");
-  if (deviceOffset + 4 < deviceCount) button(168, 216, 140, 20, "Next page");
-}
-void drawWiFi() { header("WI-FI SETUP"); button(12, 60, 296, 52, WiFi.isConnected() ? WiFi.SSID() : "Not connected", WiFi.isConnected() ? WiFi.localIP().toString() : "Tap setup to connect");button(12, 124, 296, 52, "Setup portal", "Wi-Fi, Home Assistant, and IR code");button(12, 190, 140, 28, "Back"); }
-void drawBluetooth() { header("BLUETOOTH");button(12, 50, 296, 38, "Scan nearby devices", "Five-second BLE scan");if (!bleCount) button(12, 98, 296, 42, "No results", "Discovery only — no pairing");for (uint8_t i=0;i<bleCount;i++)button(12,98+i*28,296,26,bleNames[i],"BLE device");button(12, 204, 140, 28, "Back"); }
-void drawInfrared() { header("IR REMOTE");button(12, 62, 296, 52, "Send NEC code", "0x" + irCodeText);button(12, 126, 296, 48, "Hardware required", "IR LED + transistor on GPIO 27");button(12, 190, 140, 28, "Back"); }
-void drawSystem() { header("SYSTEM");button(12, 55, 296, 40, "Display sleep", "10 seconds; any touch wakes it");button(12, 105, 296, 40, "Home Assistant", haUrl.length() ? "Configured" : "Not configured");button(12, 155, 296, 40, "Last action", notice);button(12, 204, 140, 28, "Back"); }
-void draw() { switch(page) { case AppPage::Home:drawHome();break;case AppPage::Devices:drawDevices();break;case AppPage::WiFi:drawWiFi();break;case AppPage::Bluetooth:drawBluetooth();break;case AppPage::Infrared:drawInfrared();break;case AppPage::System:drawSystem();break; } }
 
-// ----- Touch, sleep and routing -------------------------------------------------
-void wakeDisplay() { digitalWrite(TFT_BL, HIGH); displayAsleep = false; lastInteraction = millis(); draw(); }
-void handleTouch() {
-  if (!touch.Pressed()) return;
-  if (displayAsleep) { wakeDisplay(); delay(250); return; }
-  if (millis() - lastInteraction < 260) return;
-  lastInteraction = millis();
-  int x = touch.X(), y = touch.Y();
-  if (x < 0 || x >= Board::WIDTH || y < 0 || y >= Board::HEIGHT) return;
-  if (page == AppPage::Home) {
-    if (y < 110) {
-      page = x < 160 ? AppPage::Devices : AppPage::WiFi;
-      if (page == AppPage::Devices) fetchDevices();
-    }
-    else if (y < 176) page = x < 160 ? AppPage::Bluetooth : AppPage::Infrared;
-    else page = AppPage::System;
-  } else if (page == AppPage::Devices) {
-    if (!deviceCount) { if (y < 145) fetchDevices(); else if (y > 170) page = AppPage::Home; }
-    else if (y > 214 && x < 78) page = AppPage::Home;
-    else if (y > 214 && x < 158) fetchDevices();
-    else if (y > 214 && deviceOffset + 4 < deviceCount) deviceOffset += 4;
-    else if (y >= 47 && y < 215) { uint8_t row = (y - 47) / 42; if (deviceOffset + row < deviceCount) sendDeviceCommand(devices[deviceOffset + row]); }
-  } else if (page == AppPage::WiFi) { if (y < 185 && y > 116) openSetupPortal(); else if (y > 185) page = AppPage::Home; }
-  else if (page == AppPage::Bluetooth) { if (y < 92) scanBluetooth(); else if (y > 196) page = AppPage::Home; }
-  else if (page == AppPage::Infrared) { if (y < 120) sendInfrared(); else if (y > 185) page = AppPage::Home; }
-  else if (page == AppPage::System && y > 196) page = AppPage::Home;
-  draw();
+void drawDevices() {
+  header("DEVICES", bridgeReady() ? String(deviceCount) + " found" : "BRIDGE OFFLINE");
+  if (!deviceCount) {
+    card(12, 62, 296, 55, "Refresh devices", bridgeReady() ? notice : "Set Wi-Fi and Web Bridge first");
+    card(12, 178, 140, 38, "Back");
+    return;
+  }
+  for (uint8_t row = 0; row < 4; ++row) {
+    uint8_t index = deviceOffset + row;
+    if (index >= deviceCount) break;
+    Device& device = devices[index];
+    bool on = device.state == "on" || device.state == "open";
+    card(12, 48 + row * 39, 296, 35, device.name, on ? "ON  - tap to switch off" : "OFF - tap to switch on", on);
+  }
+  card(12, 210, 68, 22, "Back");
+  card(86, 210, 68, 22, "Refresh");
+  if (deviceOffset + 4 < deviceCount) card(160, 210, 148, 22, "Next page");
 }
+
+void drawWifi() {
+  header("WI-FI", wifiStatusText());
+  card(12, 50, 296, 31, "Scan networks", wifiConnecting ? "Connecting..." : "Choose your Wi-Fi");
+  if (!wifiCount) { card(12, 96, 296, 46, "No networks listed", notice); }
+  for (uint8_t row = 0; row < 4; ++row) {
+    uint8_t index = wifiOffset + row;
+    if (index >= wifiCount) break;
+    card(12, 92 + row * 29, 296, 26, wifiNames[index], String(wifiRssi[index]) + " dBm");
+  }
+  card(12, 210, 68, 22, "Back");
+  if (wifiOffset + 4 < wifiCount) card(160, 210, 148, 22, "More networks");
+}
+
+void drawBluetooth() {
+  header("BLUETOOTH", "DISCOVERY");
+  card(12, 50, 296, 36, "Scan nearby devices", "Five-second scan - no pairing");
+  if (!bleCount) card(12, 100, 296, 48, "No results", notice);
+  for (uint8_t index = 0; index < bleCount; ++index) card(12, 96 + index * 28, 296, 25, bleNames[index], "BLE device");
+  card(12, 210, 68, 22, "Back");
+}
+
+void drawInfrared() {
+  header("IR REMOTE", "GPIO 27");
+  card(12, 58, 296, 54, "Send IR command", "NEC 0x" + irCode);
+  card(12, 124, 296, 42, "Change NEC code", "Use hexadecimal digits");
+  card(12, 178, 296, 22, "Hardware", "IR LED and transistor required");
+  card(12, 210, 68, 22, "Back");
+}
+
+String sleepLabel() {
+  uint32_t value = sleepTimeout();
+  return value ? String(value / 1000) + " seconds" : "Never";
+}
+
+void drawSettings() {
+  header("SETTINGS", themeIndex == 0 ? "OCEAN" : "MIDNIGHT");
+  card(12, 48, 296, 28, "Appearance", themeIndex == 0 ? "Ocean dark - tap to change" : "Midnight dark - tap to change");
+  card(12, 80, 296, 28, "Screen sleep", sleepLabel() + " - tap to change");
+  String zone = "UTC" + String(utcOffset >= 0 ? "+" : "") + String(utcOffset);
+  card(12, 112, 296, 28, "Clock time zone", zone + " - tap to change");
+  card(12, 144, 296, 28, "Web Bridge", bridgeUrl.length() ? trimText(bridgeUrl, 34) : "Not configured");
+  card(12, 176, 296, 28, "Clear Wi-Fi", "Forget saved Wi-Fi network");
+  card(12, 210, 68, 22, "Back");
+}
+
+void drawBridge() {
+  header("WEB BRIDGE", bridgeReady() ? "READY" : "SETUP");
+  card(12, 52, 296, 36, "Bridge URL", bridgeUrl.length() ? trimText(bridgeUrl, 39) : "Tap to enter server address");
+  card(12, 94, 296, 36, "Access key", bridgeKey.length() ? "Configured" : "Optional local-network key");
+  card(12, 136, 296, 36, "Test connection", "Checks the Web Bridge");
+  card(12, 178, 296, 22, "About", "The server stores cloud login, never the CYD");
+  card(12, 210, 68, 22, "Back");
+}
+
+void drawPage() {
+  switch (page) {
+    case Page::Home: drawHome(); break;
+    case Page::Devices: drawDevices(); break;
+    case Page::Wifi: drawWifi(); break;
+    case Page::Keyboard: drawKeyboard(); break;
+    case Page::Bluetooth: drawBluetooth(); break;
+    case Page::Infrared: drawInfrared(); break;
+    case Page::Settings: drawSettings(); break;
+    case Page::Bridge: drawBridge(); break;
+  }
+}
+
+// ----- Touch routing and display sleep ------------------------------------------
+void wakeDisplay() {
+  digitalWrite(TFT_BL, HIGH);
+  displaySleeping = false;
+  lastInteraction = millis();
+  drawPage();
+}
+
+void handleTap(int x, int y) {
+  lastInteraction = millis();
+  if (page == Page::Keyboard) { handleKeyboardTap(x, y); drawPage(); return; }
+
+  if (page == Page::Home) {
+    if (y >= 52 && y < 114) page = x < 160 ? Page::Devices : Page::Wifi;
+    else if (y >= 124 && y < 186) page = x < 160 ? Page::Bluetooth : Page::Infrared;
+    else if (y >= 196) page = Page::Settings;
+    if (page == Page::Devices) fetchDevices();
+  } else if (page == Page::Devices) {
+    if (!deviceCount && y < 145) fetchDevices();
+    else if (y >= 210 && x < 80) page = Page::Home;
+    else if (y >= 210 && x < 154) fetchDevices();
+    else if (y >= 210 && deviceOffset + 4 < deviceCount) deviceOffset += 4;
+    else {
+      for (uint8_t row = 0; row < 4; ++row) {
+        int top = 48 + row * 39;
+        if (y >= top && y < top + 35 && deviceOffset + row < deviceCount) { toggleDevice(devices[deviceOffset + row]); break; }
+      }
+    }
+  } else if (page == Page::Wifi) {
+    if (y >= 50 && y < 84) scanWifi();
+    else if (y >= 92 && y < 208 && wifiCount) { uint8_t row = (y - 92) / 29; if (wifiOffset + row < wifiCount) { selectedSsid = wifiNames[wifiOffset + row]; startKeyboard(KeyboardTarget::WifiPassword, selectedSsid, "", true); } }
+    else if (y >= 210 && x < 80) page = Page::Home;
+    else if (y >= 210 && wifiOffset + 4 < wifiCount) wifiOffset += 4;
+  } else if (page == Page::Bluetooth) {
+    if (y >= 50 && y < 90) scanBluetooth(); else if (y >= 210) page = Page::Home;
+  } else if (page == Page::Infrared) {
+    if (y >= 58 && y < 114) sendInfrared();
+    else if (y >= 124 && y < 168) startKeyboard(KeyboardTarget::IrCode, "IR NEC CODE", irCode, false);
+    else if (y >= 210) page = Page::Home;
+  } else if (page == Page::Settings) {
+    if (y >= 48 && y < 76) { themeIndex = (themeIndex + 1) % kThemeCount; saveSettings(); }
+    else if (y >= 80 && y < 108) { sleepIndex = (sleepIndex + 1) % 4; saveSettings(); }
+    else if (y >= 112 && y < 140) { utcOffset = utcOffset >= 14 ? -12 : utcOffset + 1; ntpStarted = false; startClock(); saveSettings(); }
+    else if (y >= 144 && y < 172) page = Page::Bridge;
+    else if (y >= 176 && y < 204) { WiFi.disconnect(true, true); notice = "Saved Wi-Fi cleared"; }
+    else if (y >= 210) page = Page::Home;
+  } else if (page == Page::Bridge) {
+    if (y >= 52 && y < 90) startKeyboard(KeyboardTarget::BridgeUrl, "BRIDGE URL", bridgeUrl, false);
+    else if (y >= 94 && y < 132) startKeyboard(KeyboardTarget::BridgeKey, "ACCESS KEY", bridgeKey, true);
+    else if (y >= 136 && y < 174) testBridge();
+    else if (y >= 210) page = Page::Settings;
+  }
+  drawPage();
+}
+
+void pollTouch() {
+  bool pressed = touch.Pressed();
+  if (!pressed) { touchDown = false; return; }
+  if (touchDown) return;
+  touchDown = true;
+  if (displaySleeping) { wakeDisplay(); return; }
+  int x = touch.X(), y = touch.Y();
+  if (x >= 0 && x < Board::kWidth && y >= 0 && y < Board::kHeight) handleTap(x, y);
+}
+
+} // namespace
 
 void setup() {
   Serial.begin(115200);
-  screen.init(); screen.setRotation(1); screen.setSwapBytes(true);
-  pinMode(TFT_BL, OUTPUT); digitalWrite(TFT_BL, HIGH);
-  touch.setCal(526, 3443, 750, 3377, Board::WIDTH, Board::HEIGHT, 1);
-  loadSettings(); WiFi.mode(WIFI_STA); WiFi.begin();
-  NimBLEDevice::init("CYD Home"); NimBLEDevice::getScan()->setScanCallbacks(&scannerCallbacks, false);
-  irsend.begin(); lastInteraction = millis(); draw();
+  tft.init();
+  tft.setRotation(1);
+  tft.setSwapBytes(true);
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+  touch.setCal(526, 3443, 750, 3377, Board::kWidth, Board::kHeight, 1);
+  loadSettings();
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin();
+  startClock();
+  NimBLEDevice::init("CYD Home");
+  NimBLEDevice::getScan()->setScanCallbacks(&scanCallbacks, false);
+  irsend.begin();
+  lastInteraction = millis();
+  drawPage();
 }
+
 void loop() {
-  handleTouch();
-  if (!displayAsleep && millis() - lastInteraction >= Board::SLEEP_MS) { digitalWrite(TFT_BL, LOW); displayAsleep = true; }
-  delay(15);
+  pollTouch();
+  pollWifi();
+  uint32_t timeout = sleepTimeout();
+  if (!displaySleeping && timeout && millis() - lastInteraction >= timeout) {
+    digitalWrite(TFT_BL, LOW);
+    displaySleeping = true;
+  }
+  delay(12);
 }
