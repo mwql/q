@@ -219,8 +219,9 @@ Recommended physical flashing flow:
 Current built app SHA-256 (for checking accidental stale releases):
 
 ```text
-4B71A12C8A1581172A7B702B6CD12400CFA21728CC1303458D8D82C7D61F7BCC
+5FFA539655666E471859667A862DDA28334992E8BA13F63D3BF85434CA9F6B88
 ```
+*(Updated: includes LOAD_FONT2, LOAD_FONT4, LOAD_FONT6, LOAD_FONT7, and LOAD_GFXFF for full UI button, label, and Wi-Fi text rendering).*
 
 ## Required first test pass on the real CYD
 

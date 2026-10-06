@@ -116,5 +116,6 @@ Your devices are ready to control without entering any cloud passwords on the CY
 | **Password Visibility** | ✅ Verified | `[SHOW]` / `[HIDE]` toggle button on keyboard text field |
 | **Wi-Fi Diagnostics** | ✅ Verified | Hardware event listener decodes wrong password vs out-of-range |
 | **eWeLink Endpoints** | ✅ Verified | `/api/v1/devices` and toggle added to `mwaqqp-main` |
-| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (65.5% flash, 18.1% RAM) |
+| **All Fonts & Labels** | ✅ Verified | LOAD_FONT2, FONT4, FONT6, FONT7, GFXFF enabled in platformio.ini; Back button, Wi-Fi items, and key labels render crisply |
+| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (66.9% flash, 18.1% RAM) |
 | **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/` with valid manifest |

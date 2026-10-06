@@ -169,8 +169,8 @@ void drawStatusBar(const String& title) {
 
   // Title
   tft.setTextColor(c.text, c.header);
-  tft.setTextSize(2);
-  tft.drawString(title, 10, 9, 2);
+  tft.setTextSize(1);
+  tft.drawString(title, 12, 10, 2);
 
   // Right side: Wi-Fi indicator + clock
   int rx = 308;
@@ -182,17 +182,17 @@ void drawStatusBar(const String& title) {
     strftime(timeBuf, sizeof(timeBuf), "%H:%M", &localTime);
     tft.setTextSize(1);
     tft.setTextColor(c.muted, c.header);
-    tft.drawRightString(timeBuf, rx, 14, 2);
-    rx -= 42;
+    tft.drawRightString(timeBuf, rx, 10, 2);
+    rx -= 46;
   }
 
   // Wi-Fi status icon
   if (WiFi.status() == WL_CONNECTED) {
-    drawWifiIcon(rx - 12, 10, WiFi.RSSI(), c.accent);
+    drawWifiIcon(rx - 12, 13, WiFi.RSSI(), c.accent);
   } else {
     tft.setTextSize(1);
     tft.setTextColor(c.muted, c.header);
-    tft.drawRightString("OFFLINE", rx, 15, 1);
+    tft.drawRightString("OFFLINE", rx, 14, 1);
   }
 }
 
@@ -208,32 +208,29 @@ void card(int x, int y, int w, int h, const String& title,
   tft.fillRoundRect(x, y, w, h, 6, fill);
   tft.drawRoundRect(x, y, w, h, 6, borderColor);
 
+  tft.setTextSize(1);
   if (h >= 44) {
     // Large card: centered title + detail
     tft.setTextColor(textColor, fill);
-    tft.setTextSize(2);
     tft.drawCentreString(trimText(title, 18), x + w / 2, y + 8, 2);
     if (detail.length()) {
       tft.setTextColor(detailColor, fill);
-      tft.setTextSize(1);
-      tft.drawCentreString(trimText(detail, 40), x + w / 2, y + h - 16, 1);
+      tft.drawCentreString(trimText(detail, 36), x + w / 2, y + h - 18, 1);
     }
-  } else if (h >= 30) {
-    // Medium card
+  } else if (h >= 25 && detail.length() > 0) {
+    // Medium card with title and detail (e.g. Wi-Fi network, Settings row, Devices row)
     tft.setTextColor(textColor, fill);
-    tft.setTextSize(1);
-    tft.drawString(trimText(title, 20), x + 10, y + (h - 14) / 2, 2);
-    if (detail.length()) {
-      tft.setTextColor(detailColor, fill);
-      tft.drawRightString(trimText(detail, 22), x + w - 8, y + (h - 8) / 2,
-                          1);
-    }
+    tft.drawString(trimText(title, 18), x + 8, y + (h - 16) / 2, 2);
+    tft.setTextColor(detailColor, fill);
+    tft.drawRightString(trimText(detail, 20), x + w - 8, y + (h - 8) / 2, 1);
+  } else if (h >= 25) {
+    // Medium button without detail
+    tft.setTextColor(textColor, fill);
+    tft.drawCentreString(trimText(title, 20), x + w / 2, y + (h - 16) / 2, 2);
   } else {
-    // Small card / button
+    // Small card / button (e.g. "Back", "Next >" with h = 22)
     tft.setTextColor(textColor, fill);
-    tft.setTextSize(1);
-    int textWidth = tft.textWidth(trimText(title, 15), 2);
-    tft.drawCentreString(trimText(title, 15), x + w / 2, y + (h - 14) / 2, 2);
+    tft.drawCentreString(trimText(title, 15), x + w / 2, y + (h - 16) / 2, 2);
   }
 }
 
@@ -243,7 +240,7 @@ void actionButton(int x, int y, int w, int h, const String& label) {
   tft.fillRoundRect(x, y, w, h, 6, c.accent);
   tft.setTextColor(c.header, c.accent);
   tft.setTextSize(1);
-  tft.drawCentreString(label, x + w / 2, y + (h - 14) / 2, 2);
+  tft.drawCentreString(label, x + w / 2, y + (h - 16) / 2, 2);
 }
 
 // Draw toast overlay if active
@@ -1087,20 +1084,20 @@ void drawSplash() {
 
   // App name
   tft.setTextColor(c.accent, c.background);
-  tft.setTextSize(2);
-  tft.drawCentreString("CYD HOME HUB", 160, 70, 2);
+  tft.setTextSize(1);
+  tft.drawCentreString("CYD HOME HUB", 160, 65, 4);
 
   // Version
   tft.setTextColor(c.text, c.background);
   tft.setTextSize(1);
-  tft.drawCentreString("v" FW_VERSION, 160, 105, 2);
+  tft.drawCentreString("v" FW_VERSION, 160, 102, 2);
 
   // Subtitle
   tft.setTextColor(c.muted, c.background);
-  tft.drawCentreString("Touch-first smart home controller", 160, 135, 1);
+  tft.drawCentreString("Touch-first smart home controller", 160, 132, 1);
 
   // Board info
-  tft.drawCentreString("ESP32-2432S028R / TPM408-2.8", 160, 160, 1);
+  tft.drawCentreString("ESP32-2432S028R / TPM408-2.8", 160, 155, 1);
 
   // Loading bar animation
   for (int i = 0; i <= 100; i += 5) {
