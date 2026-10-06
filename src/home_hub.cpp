@@ -24,7 +24,7 @@
 namespace {
 
 enum class Page : uint8_t {
-  Home, Devices, Wifi, Keyboard, Bluetooth, Infrared, Settings, Bridge
+  Home, Devices, Wifi, Keyboard, Bluetooth, Infrared, Settings, Bridge, Fun
 };
 enum class KeyboardTarget : uint8_t {
   None, WifiPassword, BridgeUrl, BridgeKey, IrCode
@@ -970,8 +970,9 @@ void drawHome() {
   card(163, 108, 145, 58, "IR Remote", "Send NEC codes");
 
   // Settings bar at bottom
-  card(12, 174, 145, 36, "Settings");
-  card(163, 174, 145, 36, "Cloud API");
+  card(12, 174, 96, 36, "Settings");
+  card(113, 174, 96, 36, "Cloud API");
+  card(214, 174, 94, 36, "Fun", "", false);
 
   // Version footer
   tft.setTextColor(c.muted, c.background);
@@ -1226,6 +1227,23 @@ void drawBridge() {
   card(12, 214, 68, 22, "Back");
 }
 
+void drawFun() {
+  const Theme& c = theme();
+  tft.fillScreen(c.background);
+  drawStatusBar("FUN TOOLS");
+
+  card(12, 42, 145, 40, "WiFi IDS");
+  card(163, 42, 145, 40, "Flock Camera");
+  
+  card(12, 88, 145, 40, "BLE Trackers");
+  card(163, 88, 145, 40, "Saved BLE (5)");
+  
+  card(12, 134, 145, 40, "Net Stats");
+  card(163, 134, 145, 40, "Create Wi-Fi AP");
+
+  card(12, 210, 68, 22, "Back");
+}
+
 void drawPage() {
   switch (currentPage) {
     case Page::Home:      drawHome(); break;
@@ -1236,6 +1254,7 @@ void drawPage() {
     case Page::Infrared:  drawInfrared(); break;
     case Page::Settings:  drawSettings(); break;
     case Page::Bridge:    drawBridge(); break;
+    case Page::Fun:       drawFun(); break;
   }
   pageNeedsRedraw = false;
 }
@@ -1310,10 +1329,12 @@ void handleTap(int x, int y) {
       else
         navigateTo(Page::Infrared);
     } else if (y >= 174 && y < 210) {
-      if (x < 160)
+      if (x < 110)
         navigateTo(Page::Settings);
-      else
+      else if (x < 210)
         navigateTo(Page::Bridge);
+      else
+        navigateTo(Page::Fun);
     }
   } else if (currentPage == Page::Devices) {
     if (y >= 210) {
@@ -1410,6 +1431,28 @@ void handleTap(int x, int y) {
       pageNeedsRedraw = true;
     } else if (y >= 214) {
       navigateTo(Page::Settings);
+    }
+  }
+
+  } else if (currentPage == Page::Fun) {
+    if (y >= 42 && y < 82) {
+      if (x < 160) showToast("Starting WiFi IDS...");
+      else showToast("Scanning Flock Cameras...");
+      pageNeedsRedraw = true;
+    } else if (y >= 88 && y < 128) {
+      if (x < 160) showToast("Scanning for Trackers...");
+      else showToast("Opening Saved BLE..."); // Saved BLE slots logic
+      pageNeedsRedraw = true;
+    } else if (y >= 134 && y < 174) {
+      if (x < 160) showToast("Running Speed Test...");
+      else {
+        // Start a basic Wi-Fi Hotspot
+        WiFi.softAP("CYD-Hotspot", "12345678");
+        showToast("Started AP: CYD-Hotspot");
+      }
+      pageNeedsRedraw = true;
+    } else if (y >= 210 && x < 80) {
+      navigateTo(Page::Home);
     }
   }
 
