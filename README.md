@@ -1,44 +1,76 @@
-# CYD Home Hub — CYD-2432S028 / TPM408-2.8
+# CYD Home Hub V2 — ESP32-2432S028R / TPM408-2.8
 
-A touch-first 320×240 landscape application launcher for the 2.8-inch **TPM408-2.8 / CYD-2432S028**. It is not a device-hosted web UI. The screen sleeps after 10 seconds and wakes on the next touch.
+A touch-first, dark-themed 320×240 smart home controller for the **ESP32-2432S028R / CYD** with a **TPM408-2.8** display. It is an on-device embedded application, not a web page.
 
-## Included apps
+---
 
-- **Devices:** reads and controls up to 16 `switch`, `light`, `fan`, and `cover` entities exposed by Home Assistant; four devices appear per page.
-- **Wi-Fi:** opens the `CYD-Home` captive portal for Wi-Fi credentials, Home Assistant URL, long-lived token, and optional NEC IR code.
-- **Bluetooth:** scans and lists up to four nearby BLE device names/addresses. It does not pair with or control Bluetooth devices.
-- **IR Remote:** sends your configured 32-bit NEC code through an externally wired transmitter on GPIO 27.
-- **System:** shows status, configuration state, and the 10-second touch-to-wake display sleep policy.
+## What's New in Version 2.0.1 (Latest)
 
-## Why Home Assistant is used for eWeLink
+1. **Instant Touch Response (Zero-Deadzone Keyboard)**:
+   - Fixed resistive touch debouncing with rapid 250 Hz sampling (`delay(4)` loop) and 2.5ms settle delay.
+   - Continuous horizontal and vertical touch hit-testing: every tap anywhere in a key row maps to the nearest key—**zero dead zones between buttons or along margins**.
+   - Keystrokes redraw only the input field (`drawTextInput()`), delivering instant, zero-lag character updates.
+2. **Wi-Fi Password Visibility**:
+   - Added a prominent **`[SHOW]` / `[HIDE]`** toggle button on the keyboard.
+   - By default on Wi-Fi password entry, passwords are **visible** so you can easily verify every character and avoid typos.
+3. **Rock-Solid Wi-Fi Connection Manager**:
+   - 19.5 dBm maximum RF transmit power (`WiFi.setTxPower(WIFI_POWER_19_5dBm)`) to eliminate radio brownout.
+   - ESP32 hardware event monitoring (`WiFi.onEvent`) providing instant feedback for wrong passwords (`AUTH_FAIL`, `4WAY_HANDSHAKE_TIMEOUT`) and out-of-range networks.
+   - Persistent NVS credentials with automatic reconnection on boot.
+4. **eWeLink & Sonoff Native Support**:
+   - Direct integration with local **mwaqqp** server (`http://<PC_IP>:3000`) or the standalone bridge (`http://<PC_IP>:8787`).
+   - Automatically loads switches and lights from eWeLink without vendor OAuth on the ESP32.
+   - Also supports Home Assistant seamlessly.
+5. **Verified 4-Part Browser Flasher**:
+   - Ready to flash via Chrome/Edge from `web/index.html` with correct ESP32 offsets (`bootloader` at 0x1000, `partitions` at 0x8000, `boot_app0` at 0xE000, `cyd-home.bin` at 0x10000).
 
-eWeLink cloud login requires vendor OAuth/client credentials and should not be put into an ESP32 binary. Add the official Sonoff/eWeLink integration to Home Assistant, expose your entities, then CYD Home Hub controls those entities with a **Home Assistant long-lived access token**. The token stays in ESP32 NVS and is not placed in the installer site.
+---
 
-## Build once, then install from the browser
+## Architecture
 
-### Automatic (recommended)
+```
+Sonoff / eWeLink Devices
+          ↓
+Local Node.js Bridge or mwaqqp Dashboard (Port 3000 or 8787 on your PC)
+          ↓ (LAN JSON API)
+CYD ESP32 Touchscreen (CYD Home Hub V2)
+```
 
-Push this folder to a GitHub repository, enable **Settings → Pages → GitHub Actions**, and push to `main`. The included workflow builds the firmware and publishes the `web/` installer automatically. Open the Pages URL in Chrome or Edge and press **Connect & install**. Neither Arduino IDE nor a local compiler is needed after that.
+No cloud passwords or OAuth secrets are stored on the CYD. The CYD simply talks to your local LAN bridge.
 
-### Local build
+---
 
-1. Install [PlatformIO Core](https://platformio.org/install/cli), then run `pio run` in this folder.
-2. Copy the app, bootloader, partition table, and `boot_app0.bin` to `web/firmware/` as the included GitHub workflow does. The installer manifest flashes each at its required ESP32 address.
-3. Publish the `web/` directory over HTTPS (GitHub Pages, Netlify, or your own web host). Open `web/index.html` using Chrome or Edge and press **Connect & install**.
+## Hardware Configuration (Known-Good TPM408-2.8)
 
-## First use
+| Component | Pin / Value | Notes |
+|---|---|---|
+| **TFT Driver** | `ILI9341_2_DRIVER` | 320 × 240 landscape (`setRotation(1)`) |
+| **MOSI / SCLK / CS** | GPIO 13, 14, 15 | 65 MHz SPI frequency |
+| **DC / Reset** | GPIO 2, GPIO 12 | Color byte swap enabled |
+| **Backlight** | GPIO 21 | Active HIGH, auto-sleep after 10s |
+| **Touch Controller** | XPT2046 | `TFT_Touch(33, 25, 32, 39)` |
+| **IR Transmitter** | GPIO 27 | NEC transmission (transistor circuit required) |
 
-1. On the CYD, tap **Wi-Fi** → **Setup portal**. Join the `CYD-Home` network from your phone and visit `192.168.4.1`.
-2. Create a long-lived access token in Home Assistant under your profile’s Security page, then enter both the Home Assistant URL and that token in the portal alongside your Wi-Fi details.
-3. Enter your home Wi-Fi, `http://homeassistant.local:8123` (or your local Home Assistant URL), and the token. You can also set an IR NEC code, such as `20DF10EF`.
-4. Open **Devices**. Your Home Assistant `switch.*`, `light.*`, `fan.*`, and `cover.*` entities appear there.
+---
 
-## Hardware notes
+## Quick Start & Walkthrough
 
-- This targets the verified TPM408-2.8 / CYD-2432S028R ILI9341 layout: display reset GPIO 12, backlight GPIO 21, 65 MHz display SPI, color inversion, and separate bit-banged XPT2046 touch pins (33/25/32/39).
-- GPIO 27 is used only for the optional IR output. Use a transistor and IR LED with current limiting; do not drive an IR LED directly from the ESP32 pin.
-- 4 MB ESP32 CYDs are tight on space; the included partition table leaves room for OTA updates but not a large local asset library.
+### 1. Flash to CYD
+- Open `web/index.html` in Chrome or Edge (or host via GitHub Pages).
+- Connect the CYD via a micro-USB cable with data lines.
+- Click **Install CYD Home Hub V2**, select the COM port, and allow full erase on first install.
 
-## Security
+### 2. Connect to Wi-Fi
+- On the CYD home screen, tap **Wi-Fi** → **Scan Networks**.
+- Tap your 2.4 GHz Wi-Fi network.
+- The on-screen keyboard opens with **`SHOW`** mode enabled by default: you can see exactly what you type!
+- Tap **JOIN**. If the password was wrong, the device will immediately warn you. Once connected, your IP is displayed.
 
-This project intentionally excludes offensive Bluetooth/Wi-Fi functions. Keep the Home Assistant token private and revoke it in Home Assistant if the device is lost.
+### 3. Connect eWeLink Devices
+- In your computer's terminal:
+  - If using your existing **mwaqqp** server: start it with `npm start` (it runs on port 3000).
+  - If using the standalone bridge: run `node bridge/bridge.js` (runs on port 8787).
+- On the CYD, tap **Settings** → **Web Bridge**.
+- Tap **Bridge URL** and enter `http://<YOUR_COMPUTER_IP>:3000` (or `:8787`).
+- Tap **Test Connection** → "Bridge connected!".
+- Tap **Back** → **Devices** to view and toggle your Sonoff/eWeLink devices!

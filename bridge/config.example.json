@@ -1,5 +1,6 @@
 {
   "port": 8787,
+  "mwaqqpUrl": "http://127.0.0.1:3000",
   "homeAssistantUrl": "http://homeassistant.local:8123",
   "homeAssistantToken": "PASTE_A_HOME_ASSISTANT_LONG_LIVED_TOKEN_HERE",
   "cydKey": "CHOOSE_A_PRIVATE_LOCAL_KEY",
