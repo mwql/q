@@ -213,6 +213,7 @@ String apPassword = "12345678";
 bool apCaptivePortal = false;
 bool captiveRunning = false;
 String captiveHtml;   // served by captive portal web server (loaded from SD or default)
+String apUserValue;  // last value submitted from captive portal
 DNSServer apDns;
 WebServer apWeb(80);
 
@@ -263,6 +264,7 @@ void startCaptivePortal() {
   });
   apWeb.on("/setvalue", []() {
     String val = apWeb.arg("value");
+    apUserValue = val;
     apWeb.send(200, "text/plain", "Value received: " + val);
   });
   apWeb.begin();
@@ -2030,8 +2032,11 @@ void drawFunWifiAp() {
   String sdLabel = captiveHtml.length() ? ("HTML loaded (" + String(captiveHtml.length()) + "B)") : "Load /portal.html from SD";
   card(12, 188, 296, 28, "SD Card Portal", sdLabel);
 
-  card(12, 222, 65, 14, "Back");
-  card(82, 222, 226, 14, "Refresh");
+  String userDisp = apUserValue.length() ? apUserValue : "No value yet";
+  card(12, 222, 296, 22, "User Input", userDisp);
+
+  card(12, 250, 65, 14, "Back");
+  card(82, 250, 226, 14, "Refresh");
 }
 
 void drawPage() {
