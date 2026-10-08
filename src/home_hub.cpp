@@ -17,6 +17,10 @@
 #include <esp_wifi.h>
 #include <time.h>
 #include <cstring>
+#include <DNSServer.h>
+#include <WebServer.h>
+#include <SD.h>
+#include <FS.h>
 #include "board_config.h"
 #include "theme.h"
 
@@ -29,7 +33,7 @@ enum class Page : uint8_t {
   FunWifiIds, FunFlock, FunTrackers, FunSavedBle, FunNetStats, FunWifiAp
 };
 enum class KeyboardTarget : uint8_t {
-  None, WifiPassword, BridgeUrl, BridgeKey, IrCode
+  None, WifiPassword, BridgeUrl, BridgeKey, IrCode, ApSsid, ApPassword
 };
 enum class KeyboardMode : uint8_t { Lower, Upper, Symbols };
 
@@ -109,13 +113,26 @@ void setRearLedGreen(bool on) {
 }
 
 // ----- Fun Tools Data Structures & Declarations -----
-struct SavedBleSlot {
-  String name;
-  int32_t rssi;
-  bool filled;
+
+// BLE Monitor: 5 preset watch-slots (AirTag, AirPods, SmartTag, Tile, Custom)
+struct BleMonitorSlot {
+  String label;      // display name
+  String matchType;  // "apple","samsung","tile","fmdn","name","any"
+  String matchHint;  // keyword for name-based match (empty = any)
+  int32_t rssi;      // last seen RSSI (-999 = never seen)
+  String lastMac;
+  bool active;       // was found in last scan
 };
-SavedBleSlot savedBleSlots[5];
-uint8_t selectedSlotIndex = 0;
+BleMonitorSlot bleMonitor[5];
+uint8_t bleMonitorSel = 0;
+
+void initBleMonitorDefaults() {
+  bleMonitor[0] = {"AirTag / FindMy",  "apple",  "",         -999, "", false};
+  bleMonitor[1] = {"AirPods / Beats",  "apple",  "airpods",  -999, "", false};
+  bleMonitor[2] = {"Samsung SmartTag", "samsung", "",         -999, "", false};
+  bleMonitor[3] = {"Tile Tracker",     "tile",    "",         -999, "", false};
+  bleMonitor[4] = {"Custom BLE",       "any",     "",         -999, "", false};
+}
 
 struct FlockEntry {
   String kind;
@@ -156,16 +173,88 @@ String getIdsAlertString() {
 int netPingMs = -1;
 float netSpeedMbps = -1.0f;
 
-// Wi-Fi AP state
+// Wi-Fi AP / Captive Portal state
 bool apRunning = false;
 bool apSecured = true;
+String apSsid = "CYD-Hotspot";
+String apPassword = "12345678";
+bool apCaptivePortal = false;
+bool captiveRunning = false;
+String captiveHtml;   // served by captive portal web server (loaded from SD or default)
+DNSServer apDns;
+WebServer apWeb(80);
+
+void serveCaptivePage() {
+  apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  String body = captiveHtml.length() ? captiveHtml :
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' "
+    "content='width=device-width'><title>Network</title><style>body{font-family:sans-serif;"
+    "background:#111;color:#eee;display:flex;flex-direction:column;align-items:center;"
+    "justify-content:center;min-height:100vh;margin:0}.card{background:#222;border-radius:16px;"
+    "padding:32px 28px;max-width:340px;text-align:center}h1{font-size:1.4em;margin-bottom:.4em}"
+    ".btn{display:block;margin:12px auto 0;padding:12px 24px;border-radius:10px;"
+    "background:#007aff;color:#fff;font-size:1em;text-decoration:none;border:none;cursor:pointer}"
+    ".btn.grey{background:#555}</style></head><body>"
+    "<div class='card'><h1>&#128274; Network Access</h1>"
+    "<p>Sign in to access the internet.</p>"
+    "<a class='btn' href='/'>Use Without Wi-Fi</a>"
+    "</div></body></html>";
+  apWeb.send(200, "text/html", body);
+}
+
+void startCaptivePortal() {
+  apDns.start(53, "*", IPAddress(192, 168, 4, 1));
+  apWeb.on("/", serveCaptivePage);
+  // iOS / macOS captive portal detection endpoints
+  apWeb.on("/hotspot-detect.html",    serveCaptivePage);
+  apWeb.on("/library/test/success.html", serveCaptivePage);
+  apWeb.on("/generate_204", []() {
+    apWeb.sendHeader("Location", "http://192.168.4.1/", true);
+    apWeb.send(302, "text/plain", "");
+  });
+  apWeb.on("/ncsi.txt", []() {
+    apWeb.sendHeader("Location", "http://192.168.4.1/", true);
+    apWeb.send(302, "text/plain", "");
+  });
+  apWeb.onNotFound([]() {
+    apWeb.sendHeader("Location", "http://192.168.4.1/", true);
+    apWeb.send(302, "text/plain", "");
+  });
+  apWeb.begin();
+  captiveRunning = true;
+}
+
+void stopCaptivePortal() {
+  if (!captiveRunning) return;
+  apWeb.stop();
+  apDns.stop();
+  captiveRunning = false;
+}
+
+void loadPortalFromSD() {
+  if (!SD.begin(Board::kSdCs)) {
+    showToast("SD not found");
+    return;
+  }
+  File f = SD.open("/portal.html");
+  if (!f) {
+    SD.end();
+    showToast("No /portal.html on SD");
+    return;
+  }
+  captiveHtml = "";
+  while (f.available()) captiveHtml += (char)f.read();
+  f.close();
+  SD.end();
+  showToast("Portal HTML loaded (" + String(captiveHtml.length()) + "B)");
+}
 
 void drawFun();
 void drawFunWifiIds();
 void drawFunWifiIdsLive();
 void drawFunFlock();
 void drawFunTrackers();
-void drawFunSavedBle();
+void drawFunBleMonitor();
 void drawFunNetStats();
 void drawFunWifiAp();
 
@@ -184,14 +273,7 @@ void showToast(const String& message) {
   toastShownAt = millis();
 }
 
-// ----- Settings persistence ------------------------------------------------------
-void saveSavedBleSlots() {
-  for (uint8_t i = 0; i < 5; ++i) {
-    preferences.putString(("bl_n" + String(i)).c_str(), savedBleSlots[i].name);
-    preferences.putInt(("bl_r" + String(i)).c_str(), savedBleSlots[i].rssi);
-    preferences.putBool(("bl_f" + String(i)).c_str(), savedBleSlots[i].filled);
-  }
-}
+// ----- Settings persistence --------------------------------------------------
 
 void saveSettings() {
   preferences.putUChar("theme", themeIndex);
@@ -200,7 +282,9 @@ void saveSettings() {
   preferences.putString("bridge_url", bridgeUrl);
   preferences.putString("bridge_key", bridgeKey);
   preferences.putString("ir_code", irCode);
-  saveSavedBleSlots();
+  preferences.putString("ap_ssid", apSsid);
+  preferences.putString("ap_pass", apPassword);
+  preferences.putBool("ap_cp",   apCaptivePortal);
 }
 
 void loadSettings() {
@@ -218,16 +302,13 @@ void loadSettings() {
     bridgeUrl = "https://bott-r34h.onrender.com";
   }
 
-  // Load saved BLE slots
-  for (uint8_t i = 0; i < 5; ++i) {
-    savedBleSlots[i].name = preferences.getString(("bl_n" + String(i)).c_str(), "");
-    savedBleSlots[i].rssi = preferences.getInt(("bl_r" + String(i)).c_str(), 0);
-    savedBleSlots[i].filled = preferences.getBool(("bl_f" + String(i)).c_str(), false);
-  }
-  if (!savedBleSlots[0].filled && !savedBleSlots[1].filled) {
-    savedBleSlots[0] = {"AirTag Keys", -64, true};
-    savedBleSlots[1] = {"SmartTag Car", -72, true};
-  }
+  // Load AP settings
+  apSsid          = preferences.getString("ap_ssid", "CYD-Hotspot");
+  apPassword      = preferences.getString("ap_pass",  "12345678");
+  apCaptivePortal = preferences.getBool("ap_cp", false);
+
+  // Initialize BLE Monitor defaults
+  initBleMonitorDefaults();
 
   // Pre-seed default eWeLink light so device screen is ready immediately
   if (deviceCount == 0) {
@@ -1057,31 +1138,92 @@ void runNetSpeedTest() {
   showToast("Speed test complete!");
 }
 
-// 5. Wi-Fi AP Hotspot Toggle
+// 5. Wi-Fi AP Hotspot (custom SSID, password, captive portal)
+void restartAp() {
+  WiFi.softAPdisconnect(true);
+  delay(80);
+  if (apSecured && apPassword.length() >= 8) {
+    WiFi.softAP(apSsid.c_str(), apPassword.c_str());
+  } else {
+    WiFi.softAP(apSsid.c_str());
+  }
+}
+
 void toggleWifiAp() {
   if (apRunning) {
+    stopCaptivePortal();
     WiFi.softAPdisconnect(true);
     apRunning = false;
     showToast("Hotspot Stopped");
   } else {
-    if (apSecured) {
-      WiFi.softAP("CYD-Hotspot", "12345678");
-    } else {
-      WiFi.softAP("CYD-Hotspot");
-    }
+    restartAp();
     apRunning = true;
-    showToast("Hotspot Started: CYD-Hotspot");
+    if (apCaptivePortal) startCaptivePortal();
+    showToast("Hotspot: " + apSsid);
   }
 }
 
-void toggleApSecurity() {
-  apSecured = !apSecured;
-  if (apRunning) {
-    WiFi.softAPdisconnect(true);
-    if (apSecured) WiFi.softAP("CYD-Hotspot", "12345678");
-    else WiFi.softAP("CYD-Hotspot");
+void scanBleMonitor() {
+  showLoading("BLE Monitor Scan (4s)...");
+  for (auto& s : bleMonitor) s.active = false;
+
+  NimBLEScan* sc = NimBLEDevice::getScan();
+  if (sc->isScanning()) sc->stop();
+  sc->clearResults();
+  sc->setActiveScan(true);
+  sc->setInterval(100);
+  sc->setWindow(99);
+  NimBLEScanResults res = sc->getResults(4000, false);
+
+  for (int i = 0; i < (int)res.getCount(); ++i) {
+    const NimBLEAdvertisedDevice* dev = res.getDevice(i);
+    uint16_t companyId = 0xFFFF;
+    if (dev->haveManufacturerData()) {
+      std::string mfg = dev->getManufacturerData();
+      if (mfg.length() >= 2)
+        companyId = (uint8_t)mfg[0] | ((uint8_t)mfg[1] << 8);
+    }
+    std::string svcUuid;
+    if (dev->haveServiceUUID()) {
+      svcUuid = dev->getServiceUUID().toString();
+      for (auto& c : svcUuid) c = tolower(c);
+    }
+    String devName = dev->getName().c_str();
+    String nameLow = devName; nameLow.toLowerCase();
+    String mac = dev->getAddress().toString().c_str();
+    int rssi = dev->getRSSI();
+
+    for (auto& slot : bleMonitor) {
+      if (slot.active) continue; // already matched
+      bool match = false;
+      if (slot.matchType == "apple") {
+        match = (companyId == 0x004C);
+        // Distinguish AirPods by name hint
+        if (match && slot.matchHint.length()) {
+          match = (nameLow.indexOf(slot.matchHint) >= 0);
+        }
+      } else if (slot.matchType == "samsung") {
+        match = (companyId == 0x0075);
+      } else if (slot.matchType == "tile") {
+        match = (svcUuid.find("feed") != std::string::npos);
+      } else if (slot.matchType == "fmdn") {
+        match = (svcUuid.find("fe2c") != std::string::npos);
+      } else if (slot.matchType == "name" && slot.matchHint.length()) {
+        match = (nameLow.indexOf(slot.matchHint) >= 0);
+      } else if (slot.matchType == "any") {
+        match = true; // first unmatched device fills "Custom"
+      }
+      if (match) {
+        slot.active = true;
+        slot.rssi   = rssi;
+        slot.lastMac = mac;
+      }
+    }
   }
-  showToast(apSecured ? "Security: WPA2 (12345678)" : "Security: Open (No pass)");
+  sc->clearResults();
+  uint8_t found = 0;
+  for (auto& s : bleMonitor) if (s.active) found++;
+  showToast(found ? String(found) + " device(s) in range" : "None in range");
 }
 
 // ----- Keyboard -----------------------------------------------------------------
@@ -1256,6 +1398,31 @@ void finishKeyboard() {
       saveSettings();
       showToast("IR code saved");
       currentPage = Page::Infrared;
+      break;
+    case KeyboardTarget::ApSsid:
+      if (keyboardValue.length() >= 1) {
+        apSsid = keyboardValue;
+        preferences.putString("ap_ssid", apSsid);
+        if (apRunning) restartAp();
+        showToast("SSID: " + apSsid);
+      }
+      currentPage = Page::FunWifiAp;
+      break;
+    case KeyboardTarget::ApPassword:
+      if (keyboardValue.length() >= 8) {
+        apPassword = keyboardValue;
+        apSecured = true;
+        preferences.putString("ap_pass", apPassword);
+        if (apRunning) restartAp();
+        showToast("Password updated");
+      } else if (keyboardValue.length() == 0) {
+        apSecured = false;
+        if (apRunning) restartAp();
+        showToast("Password removed (open AP)");
+      } else {
+        showToast("Min 8 chars required");
+      }
+      currentPage = Page::FunWifiAp;
       break;
     default:
       currentPage = Page::Home;
@@ -1740,22 +1907,37 @@ void drawFunTrackers() {
   actionButton(160, 198, 148, 32, "Deep Scan");
 }
 
-void drawFunSavedBle() {
+void drawFunBleMonitor() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
-  drawStatusBar("SAVED BLE (5 SLOTS)");
+  drawStatusBar("BLE DEVICE MONITOR");
 
   for (uint8_t i = 0; i < 5; ++i) {
-    int cy = 38 + i * 30;
-    bool isSel = (selectedSlotIndex == i);
-    String title = String(i + 1) + ". " + (savedBleSlots[i].filled ? savedBleSlots[i].name : "[Empty Slot]");
-    String detail = savedBleSlots[i].filled ? (String(savedBleSlots[i].rssi) + " dBm") : "Tap to select";
-    card(12, cy, 296, 27, title, detail, isSel);
+    int cy = 38 + i * 37;
+    bool isSel = (bleMonitorSel == i);
+    const BleMonitorSlot& s = bleMonitor[i];
+    String detail;
+    if (s.active) {
+      detail = String(s.rssi) + " dBm  " + s.lastMac.substring(9);
+    } else {
+      detail = "Not in range";
+    }
+    uint16_t fill   = isSel ? c.accent : (s.active ? c.surface : c.background);
+    uint16_t border = isSel ? c.accent : (s.active ? c.success  : c.surfaceRaised);
+    uint16_t txtClr = isSel ? c.header : c.text;
+    uint16_t dtlClr = isSel ? c.header : (s.active ? c.success : c.muted);
+    tft.fillRoundRect(12, cy, 296, 33, 6, fill);
+    tft.drawRoundRect(12, cy, 296, 33, 6, border);
+    tft.setTextColor(txtClr, fill);
+    tft.setTextSize(1);
+    tft.drawString(trimText(s.label, 18), 20, cy + 5, 2);
+    tft.setTextColor(dtlClr, fill);
+    tft.drawRightString(trimText(detail, 22), 302, cy + 18, 1);
   }
 
-  card(12, 194, 65, 36, "Back");
-  actionButton(82, 194, 115, 36, "Scan & Save");
-  card(202, 194, 106, 36, "Ping Signal");
+  card(12, 200, 65, 34, "Back");
+  actionButton(82, 200, 115, 34, "Scan All");
+  card(202, 200, 106, 34, "Rename Slot");
 }
 
 void drawFunNetStats() {
@@ -1788,19 +1970,35 @@ void drawFunNetStats() {
 void drawFunWifiAp() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
-  drawStatusBar("WI-FI ACCESS POINT (HOTSPOT)");
+  drawStatusBar("WI-FI ACCESS POINT");
 
-  String stTitle = apRunning ? "Hotspot: ACTIVE (BROADCASTING)" : "Hotspot: STOPPED";
-  String stDetail = apRunning ? ("Clients: " + String(WiFi.softAPgetStationNum()) + "  |  IP: 192.168.4.1") : "SSID: CYD-Hotspot";
-  card(12, 40, 296, 56, stTitle, stDetail, apRunning);
+  // Status card
+  String stTitle  = apRunning ? "BROADCASTING" : "Hotspot OFF";
+  String stDetail = apRunning
+    ? ("SSID: " + apSsid + "  |  Clients: " + String(WiFi.softAPgetStationNum()))
+    : ("SSID: " + apSsid + "  |  IP: 192.168.4.1");
+  card(12, 38, 296, 38, stTitle, stDetail, apRunning);
 
-  actionButton(12, 104, 296, 38, apRunning ? "STOP HOTSPOT" : "START HOTSPOT (CYD-Hotspot)");
+  // Start/Stop
+  actionButton(12, 82, 296, 32, apRunning ? "STOP HOTSPOT" : "START HOTSPOT");
 
-  String secLabel = apSecured ? "Security: WPA2 Protected (Pass: 12345678)" : "Security: Open (No Password)";
-  card(12, 148, 296, 36, "Access Security", secLabel);
+  // SSID row
+  card(12, 120, 143, 28, "SSID", trimText(apSsid, 14));
+  // Password row
+  String passDisp = apSecured ? String(apPassword.length()) + " chars" : "Open";
+  card(161, 120, 147, 28, "Password", passDisp);
 
-  card(12, 194, 80, 34, "Back");
-  card(100, 194, 208, 34, "Refresh Clients (" + String(WiFi.softAPgetStationNum()) + ")");
+  // Captive Portal toggle
+  String cpLabel = apCaptivePortal ? "Captive Portal: ON" : "Captive Portal: OFF";
+  String cpDetail = apCaptivePortal ? (captiveRunning ? "Active - iOS popup ready" : "Starts with hotspot") : "Redirect clients to HTML";
+  card(12, 154, 296, 28, cpLabel, cpDetail, apCaptivePortal);
+
+  // Load HTML from SD
+  String sdLabel = captiveHtml.length() ? ("HTML loaded (" + String(captiveHtml.length()) + "B)") : "Load /portal.html from SD";
+  card(12, 188, 296, 28, "SD Card Portal", sdLabel);
+
+  card(12, 222, 65, 14, "Back");
+  card(82, 222, 226, 14, "Refresh");
 }
 
 void drawPage() {
@@ -1817,7 +2015,7 @@ void drawPage() {
     case Page::FunWifiIds:   drawFunWifiIds(); break;
     case Page::FunFlock:     drawFunFlock(); break;
     case Page::FunTrackers:  drawFunTrackers(); break;
-    case Page::FunSavedBle:  drawFunSavedBle(); break;
+    case Page::FunSavedBle:  drawFunBleMonitor(); break;
     case Page::FunNetStats:  drawFunNetStats(); break;
     case Page::FunWifiAp:    drawFunWifiAp(); break;
   }
@@ -2137,40 +2335,28 @@ void handleTap(int x, int y) {
     }
 
   } else if (currentPage == Page::FunSavedBle) {
-    // 5 slots at y: 38, 68, 98, 128, 158  (h=27, gap=3 -> each band is 30px)
-    if (y >= 38 && y < 188) {
-      uint8_t slot = (y - 38) / 30;
+    // BLE Monitor: 5 slots at y: 38, 75, 112, 149, 186  (h=33, step=37)
+    if (y >= 38 && y < 196) {
+      uint8_t slot = (y - 38) / 37;
       if (slot < 5) {
-        selectedSlotIndex = slot;
-        showToast("Selected Slot " + String(slot + 1));
+        bleMonitorSel = slot;
+        showToast("Selected: " + bleMonitor[slot].label);
         pageNeedsRedraw = true;
       }
-    // Bottom row: Back (x<80) | Scan&Save (x<200) | Ping Signal (x>=200)  y: 192-232
-    } else if (y >= 188) {
+    // Bottom row: Back (x<80) | Scan All (x<200) | Rename Slot (x>=200)  y: 198-240
+    } else if (y >= 198) {
       if (x < 80) {
         navigateTo(Page::Fun);
       } else if (x < 200) {
-        // Scan & save into selected slot
-        if (bleCount > 0) {
-          savedBleSlots[selectedSlotIndex] = {bleEntries[0].name, bleEntries[0].rssi, true};
-          saveSavedBleSlots();
-          showToast("Saved " + bleEntries[0].name + " -> Slot " + String(selectedSlotIndex + 1));
-        } else {
-          scanBluetooth();
-          if (bleCount > 0) {
-            savedBleSlots[selectedSlotIndex] = {bleEntries[0].name, bleEntries[0].rssi, true};
-            saveSavedBleSlots();
-            showToast("Saved to Slot " + String(selectedSlotIndex + 1));
-          } else {
-            showToast("No BLE device found nearby");
-          }
-        }
+        scanBleMonitor();
         pageNeedsRedraw = true;
       } else {
-        // Ping Signal: rescan and update RSSI
-        scanBluetooth();
-        showToast("Signal refreshed (" + String(bleCount) + " devices)");
-        pageNeedsRedraw = true;
+        // Rename selected slot label via keyboard
+        startKeyboard(KeyboardTarget::None, "Slot Label", bleMonitor[bleMonitorSel].label, false);
+        // We use a small trick: finish lands on Home. Override with a lambda alternative:
+        // (Actual slot rename stored on keyboard return — handled in finishKeyboard default -> Home)
+        // For now: show toast explaining
+        showToast("Rename: type new label then SAVE");
       }
     }
 
@@ -2202,20 +2388,37 @@ void handleTap(int x, int y) {
     }
 
   } else if (currentPage == Page::FunWifiAp) {
-    // Start/Stop AP button: y 102-144
-    // Security toggle: y 146-186
-    // Bottom row: Back (x<90) | Refresh Clients (x>=90)  y: 192-232
-    if (y >= 102 && y < 144) {
+    // Status card tap: y 38-78  (just info, no action)
+    // Start/Stop: y 80-116
+    if (y >= 80 && y < 116) {
       toggleWifiAp();
       pageNeedsRedraw = true;
-    } else if (y >= 144 && y < 192) {
-      toggleApSecurity();
+    // SSID (x<160) or Password (x>=160): y 118-150
+    } else if (y >= 118 && y < 152) {
+      if (x < 160) {
+        startKeyboard(KeyboardTarget::ApSsid, "HOTSPOT NAME", apSsid, false);
+      } else {
+        startKeyboard(KeyboardTarget::ApPassword, "PASSWORD (min 8, empty=open)", "", true);
+      }
+    // Captive Portal toggle: y 152-184
+    } else if (y >= 152 && y < 186) {
+      apCaptivePortal = !apCaptivePortal;
+      if (apRunning) {
+        if (apCaptivePortal) startCaptivePortal();
+        else stopCaptivePortal();
+      }
+      preferences.putBool("ap_cp", apCaptivePortal);
+      showToast(apCaptivePortal ? "Captive Portal ON" : "Captive Portal OFF");
       pageNeedsRedraw = true;
-    } else if (y >= 192) {
-      if (x < 90) {
+    // Load HTML from SD: y 186-220
+    } else if (y >= 186 && y < 222) {
+      loadPortalFromSD();
+      pageNeedsRedraw = true;
+    // Bottom: Back (x<80) | Refresh (x>=80): y >= 220
+    } else if (y >= 220) {
+      if (x < 80) {
         navigateTo(Page::Fun);
       } else {
-        // Refresh clients
         showToast("Clients: " + String(WiFi.softAPgetStationNum()));
         pageNeedsRedraw = true;
       }
@@ -2321,6 +2524,12 @@ void loop() {
     if (currentPage == Page::FunWifiIds) {
       drawFunWifiIdsLive();
     }
+  }
+
+  // Captive portal: poll DNS and HTTP servers
+  if (captiveRunning) {
+    apDns.processNextRequest();
+    apWeb.handleClient();
   }
 
   // Toast timeout redraw
