@@ -150,9 +150,12 @@ static const uint8_t kAdvAirPods3[] = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-// 5. Apple TV Setup (Proximity Setup popup)
+// 5. Apple TV Setup (Proximity Setup popup - for proximity-triggered pairing)
 static const uint8_t kAdvAppleTv[] = {
-  0x4c, 0x00, 0x04, 0x04, 0x2a, 0x00, 0x00, 0x00
+  0x1e, 0xff, 0x4c, 0x00, 0x07, 0x19, 0x07, 0x0f,  // AD header + Apple proximity pairing message
+  0x20, 0x75, 0xaa, 0x30,                             // Model id (Apple TV / AirPods)
+  0x01, 0x00, 0x00, 0x45,                             // Status bits and additional data
+  0x12, 0x12, 0x12                                      // More data (Apple device identification)
 };
 
 const BleBeaconPreset blePresets[5] = {
@@ -160,7 +163,7 @@ const BleBeaconPreset blePresets[5] = {
   {"Apple AirTag",    "FindMy Beacon Signal", kAdvAirTag,     sizeof(kAdvAirTag)},
   {"AirPods Max",     "Proximity Pair Popup", kAdvAirPodsMax, sizeof(kAdvAirPodsMax)},
   {"AirPods 3rd Gen", "Proximity Pair Popup", kAdvAirPods3,   sizeof(kAdvAirPods3)},
-  {"Apple TV Setup",  "Proximity Setup Popup",kAdvAppleTv,    sizeof(kAdvAppleTv)}
+  {"Apple TV Setup",  "Proximity Pair Popup (like AirPods)",kAdvAppleTv,    sizeof(kAdvAppleTv)}
 };
 
 bool bleTransmitting = false;
