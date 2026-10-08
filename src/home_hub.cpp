@@ -114,25 +114,57 @@ void setRearLedGreen(bool on) {
 
 // ----- Fun Tools Data Structures & Declarations -----
 
-// BLE Monitor: 5 preset watch-slots (AirTag, AirPods, SmartTag, Tile, Custom)
-struct BleMonitorSlot {
-  String label;      // display name
-  String matchType;  // "apple","samsung","tile","fmdn","name","any"
-  String matchHint;  // keyword for name-based match (empty = any)
-  int32_t rssi;      // last seen RSSI (-999 = never seen)
-  String lastMac;
-  bool active;       // was found in last scan
+// BLE Beacon Transmitter: 5 device presets (AirPods Pro, AirTag, AirPods Max, AirPods 3, Apple TV)
+struct BleBeaconPreset {
+  const char* label;
+  const char* subtitle;
+  const uint8_t* payload;
+  size_t payloadLen;
 };
-BleMonitorSlot bleMonitor[5];
-uint8_t bleMonitorSel = 0;
 
-void initBleMonitorDefaults() {
-  bleMonitor[0] = {"AirTag / FindMy",  "apple",  "",         -999, "", false};
-  bleMonitor[1] = {"AirPods / Beats",  "apple",  "airpods",  -999, "", false};
-  bleMonitor[2] = {"Samsung SmartTag", "samsung", "",         -999, "", false};
-  bleMonitor[3] = {"Tile Tracker",     "tile",    "",         -999, "", false};
-  bleMonitor[4] = {"Custom BLE",       "any",     "",         -999, "", false};
-}
+// 1. AirPods Pro (Proximity Pairing modal popup)
+static const uint8_t kAdvAirPodsPro[] = {
+  0x4c, 0x00, 0x07, 0x19, 0x01, 0x0e, 0x20, 0x75, 0xaa, 0x30,
+  0x01, 0x00, 0x00, 0x45, 0x12, 0x12, 0x12, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// 2. Apple AirTag (FindMy offline beacon signal)
+static const uint8_t kAdvAirTag[] = {
+  0x4c, 0x00, 0x12, 0x19, 0x00, 0x4d, 0x6e, 0x3b, 0x8a, 0x90,
+  0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
+  0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x05
+};
+
+// 3. AirPods Max (Proximity Pairing modal popup)
+static const uint8_t kAdvAirPodsMax[] = {
+  0x4c, 0x00, 0x07, 0x19, 0x01, 0x0a, 0x20, 0x75, 0xaa, 0x30,
+  0x01, 0x00, 0x00, 0x45, 0x12, 0x12, 0x12, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// 4. AirPods 3rd Gen (Proximity Pairing modal popup)
+static const uint8_t kAdvAirPods3[] = {
+  0x4c, 0x00, 0x07, 0x19, 0x01, 0x13, 0x20, 0x75, 0xaa, 0x30,
+  0x01, 0x00, 0x00, 0x45, 0x12, 0x12, 0x12, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// 5. Apple TV Setup (Proximity Setup popup)
+static const uint8_t kAdvAppleTv[] = {
+  0x4c, 0x00, 0x04, 0x04, 0x2a, 0x00, 0x00, 0x00
+};
+
+const BleBeaconPreset blePresets[5] = {
+  {"AirPods Pro",     "Proximity Pair Popup", kAdvAirPodsPro, sizeof(kAdvAirPodsPro)},
+  {"Apple AirTag",    "FindMy Beacon Signal", kAdvAirTag,     sizeof(kAdvAirTag)},
+  {"AirPods Max",     "Proximity Pair Popup", kAdvAirPodsMax, sizeof(kAdvAirPodsMax)},
+  {"AirPods 3rd Gen", "Proximity Pair Popup", kAdvAirPods3,   sizeof(kAdvAirPods3)},
+  {"Apple TV Setup",  "Proximity Setup Popup",kAdvAppleTv,    sizeof(kAdvAppleTv)}
+};
+
+bool bleTransmitting = false;
+uint8_t bleSelectedPreset = 0;
 
 struct FlockEntry {
   String kind;
@@ -194,11 +226,20 @@ void serveCaptivePage() {
     "padding:32px 28px;max-width:340px;text-align:center}h1{font-size:1.4em;margin-bottom:.4em}"
     ".btn{display:block;margin:12px auto 0;padding:12px 24px;border-radius:10px;"
     "background:#007aff;color:#fff;font-size:1em;text-decoration:none;border:none;cursor:pointer}"
-    ".btn.grey{background:#555}</style></head><body>"
+    ".btn.grey{background:#555}input[type=text]{width:80%;padding:10px;margin:8px auto;display:block;"
+    "border-radius:8px;border:1px solid #444;background:#333;color:#eee;font-size:1em;text-align:center}"
+    "#resultCard{display:none;margin-top:16px}</style></head><body>"
     "<div class='card'><h1>&#128274; Network Access</h1>"
     "<p>Sign in to access the internet.</p>"
-    "<a class='btn' href='/'>Use Without Wi-Fi</a>"
-    "</div></body></html>";
+    "<input type='text' id='myInput' placeholder='Enter text here'>"
+    "<button class='btn' onclick='showValue()'>Show Value</button>"
+    "<div id='resultCard' class='card'><p id='resultText'></p></div>"
+    "<a class='btn grey' href='/'>Use Without Wi-Fi</a>"
+    "</div><script>function showValue(){"
+    "var v=document.getElementById('myInput').value;"
+    "document.getElementById('resultText').textContent='You entered: '+v;"
+    "document.getElementById('resultCard').style.display='block';"
+    "}</script></body></html>";
   apWeb.send(200, "text/html", body);
 }
 
@@ -219,6 +260,10 @@ void startCaptivePortal() {
   apWeb.onNotFound([]() {
     apWeb.sendHeader("Location", "http://192.168.4.1/", true);
     apWeb.send(302, "text/plain", "");
+  });
+  apWeb.on("/setvalue", []() {
+    String val = apWeb.arg("value");
+    apWeb.send(200, "text/plain", "Value received: " + val);
   });
   apWeb.begin();
   captiveRunning = true;
@@ -309,9 +354,6 @@ void loadSettings() {
   apSsid          = preferences.getString("ap_ssid", "CYD-Hotspot");
   apPassword      = preferences.getString("ap_pass",  "12345678");
   apCaptivePortal = preferences.getBool("ap_cp", false);
-
-  // Initialize BLE Monitor defaults
-  initBleMonitorDefaults();
 
   // Pre-seed default eWeLink light so device screen is ready immediately
   if (deviceCount == 0) {
@@ -1166,67 +1208,40 @@ void toggleWifiAp() {
   }
 }
 
-void scanBleMonitor() {
-  showLoading("BLE Monitor Scan (4s)...");
-  for (auto& s : bleMonitor) s.active = false;
+void stopBleBeacon() {
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  if (adv && adv->isAdvertising()) {
+    adv->stop();
+  }
+  bleTransmitting = false;
+  showToast("BLE signal stopped");
+}
+
+void startBleBeacon(uint8_t idx) {
+  if (idx >= 5) return;
+  bleSelectedPreset = idx;
 
   NimBLEScan* sc = NimBLEDevice::getScan();
-  if (sc->isScanning()) sc->stop();
-  sc->clearResults();
-  sc->setActiveScan(true);
-  sc->setInterval(100);
-  sc->setWindow(99);
-  NimBLEScanResults res = sc->getResults(4000, false);
-
-  for (int i = 0; i < (int)res.getCount(); ++i) {
-    const NimBLEAdvertisedDevice* dev = res.getDevice(i);
-    uint16_t companyId = 0xFFFF;
-    if (dev->haveManufacturerData()) {
-      std::string mfg = dev->getManufacturerData();
-      if (mfg.length() >= 2)
-        companyId = (uint8_t)mfg[0] | ((uint8_t)mfg[1] << 8);
-    }
-    std::string svcUuid;
-    if (dev->haveServiceUUID()) {
-      svcUuid = dev->getServiceUUID().toString();
-      for (auto& c : svcUuid) c = tolower(c);
-    }
-    String devName = dev->getName().c_str();
-    String nameLow = devName; nameLow.toLowerCase();
-    String mac = dev->getAddress().toString().c_str();
-    int rssi = dev->getRSSI();
-
-    for (auto& slot : bleMonitor) {
-      if (slot.active) continue; // already matched
-      bool match = false;
-      if (slot.matchType == "apple") {
-        match = (companyId == 0x004C);
-        // Distinguish AirPods by name hint
-        if (match && slot.matchHint.length()) {
-          match = (nameLow.indexOf(slot.matchHint) >= 0);
-        }
-      } else if (slot.matchType == "samsung") {
-        match = (companyId == 0x0075);
-      } else if (slot.matchType == "tile") {
-        match = (svcUuid.find("feed") != std::string::npos);
-      } else if (slot.matchType == "fmdn") {
-        match = (svcUuid.find("fe2c") != std::string::npos);
-      } else if (slot.matchType == "name" && slot.matchHint.length()) {
-        match = (nameLow.indexOf(slot.matchHint) >= 0);
-      } else if (slot.matchType == "any") {
-        match = true; // first unmatched device fills "Custom"
-      }
-      if (match) {
-        slot.active = true;
-        slot.rssi   = rssi;
-        slot.lastMac = mac;
-      }
-    }
+  if (sc && sc->isScanning()) {
+    sc->stop();
   }
-  sc->clearResults();
-  uint8_t found = 0;
-  for (auto& s : bleMonitor) if (s.active) found++;
-  showToast(found ? String(found) + " device(s) in range" : "None in range");
+
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  if (adv->isAdvertising()) {
+    adv->stop();
+  }
+
+  NimBLEAdvertisementData advData;
+  advData.setFlags(0x06); // BR/EDR Not Supported + LE General Discoverable
+  advData.setManufacturerData(std::string((const char*)blePresets[idx].payload, blePresets[idx].payloadLen));
+
+  adv->setAdvertisementData(advData);
+  adv->setMinInterval(32); // 20ms
+  adv->setMaxInterval(64); // 40ms
+  adv->start();
+
+  bleTransmitting = true;
+  showToast("Transmitting " + String(blePresets[idx].label));
 }
 
 // ----- Keyboard -----------------------------------------------------------------
@@ -1913,34 +1928,49 @@ void drawFunTrackers() {
 void drawFunBleMonitor() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
-  drawStatusBar("BLE DEVICE MONITOR");
+  drawStatusBar("SAVED BLE BEACONS");
 
-  for (uint8_t i = 0; i < 5; ++i) {
-    int cy = 38 + i * 37;
-    bool isSel = (bleMonitorSel == i);
-    const BleMonitorSlot& s = bleMonitor[i];
-    String detail;
-    if (s.active) {
-      detail = String(s.rssi) + " dBm  " + s.lastMac.substring(9);
-    } else {
-      detail = "Not in range";
-    }
-    uint16_t fill   = isSel ? c.accent : (s.active ? c.surface : c.background);
-    uint16_t border = isSel ? c.accent : (s.active ? c.success  : c.surfaceRaised);
-    uint16_t txtClr = isSel ? c.header : c.text;
-    uint16_t dtlClr = isSel ? c.header : (s.active ? c.success : c.muted);
-    tft.fillRoundRect(12, cy, 296, 33, 6, fill);
-    tft.drawRoundRect(12, cy, 296, 33, 6, border);
-    tft.setTextColor(txtClr, fill);
+  // Status Banner
+  if (bleTransmitting) {
+    tft.fillRoundRect(12, 38, 296, 26, 6, c.accent);
+    tft.setTextColor(c.header, c.accent);
     tft.setTextSize(1);
-    tft.drawString(trimText(s.label, 18), 20, cy + 5, 2);
-    tft.setTextColor(dtlClr, fill);
-    tft.drawRightString(trimText(detail, 22), 302, cy + 18, 1);
+    tft.drawCentreString("SIGNAL: " + String(blePresets[bleSelectedPreset].label), 160, 43, 2);
+  } else {
+    tft.fillRoundRect(12, 38, 296, 26, 6, c.surface);
+    tft.drawRoundRect(12, 38, 296, 26, 6, c.surfaceRaised);
+    tft.setTextColor(c.muted, c.surface);
+    tft.setTextSize(1);
+    tft.drawCentreString("TRANSMITTER IDLE (Tap to broadcast)", 160, 44, 2);
   }
 
-  card(12, 200, 65, 34, "Back");
-  actionButton(82, 200, 115, 34, "Scan All");
-  card(202, 200, 106, 34, "Rename Slot");
+  // 5 Preset slots
+  for (uint8_t i = 0; i < 5; ++i) {
+    int cy = 68 + i * 26;
+    bool isSel = (bleSelectedPreset == i);
+    bool isTx  = bleTransmitting && isSel;
+
+    uint16_t fill   = isTx ? c.accent : (isSel ? c.surfaceRaised : c.surface);
+    uint16_t border = isTx ? c.success : (isSel ? c.accent : c.surfaceRaised);
+    uint16_t txtClr = isTx ? c.header : (isSel ? c.header : c.text);
+
+    tft.fillRoundRect(12, cy, 296, 23, 5, fill);
+    tft.drawRoundRect(12, cy, 296, 23, 5, border);
+
+    tft.setTextColor(txtClr, fill);
+    tft.setTextSize(1);
+    tft.drawString(blePresets[i].label, 20, cy + 4, 2);
+
+    String detail = isTx ? "TRANSMITTING" : (isSel ? "[READY]" : blePresets[i].subtitle);
+    uint16_t dtlClr = isTx ? c.header : (isSel ? c.accent : c.muted);
+    tft.setTextColor(dtlClr, fill);
+    tft.drawRightString(detail, 300, cy + 5, 1);
+  }
+
+  // Bottom controls
+  card(12, 202, 65, 32, "Back");
+  actionButton(82, 202, 118, 32, bleTransmitting ? "Re-Transmit" : "Transmit");
+  card(205, 202, 103, 32, "Stop");
 }
 
 void drawFunNetStats() {
@@ -2067,6 +2097,9 @@ void wakeDisplay() {
 }
 
 void navigateTo(Page target) {
+  if (currentPage == Page::FunSavedBle && target != Page::FunSavedBle) {
+    stopBleBeacon();
+  }
   previousPage = currentPage;
   currentPage = target;
   pageOpenedAt = millis();
@@ -2338,28 +2371,24 @@ void handleTap(int x, int y) {
     }
 
   } else if (currentPage == Page::FunSavedBle) {
-    // BLE Monitor: 5 slots at y: 38, 75, 112, 149, 186  (h=33, step=37)
-    if (y >= 38 && y < 196) {
-      uint8_t slot = (y - 38) / 37;
+    // 5 slots: y: 68-198 (height 23 each, step 26)
+    if (y >= 68 && y < 198) {
+      uint8_t slot = (y - 68) / 26;
       if (slot < 5) {
-        bleMonitorSel = slot;
-        showToast("Selected: " + bleMonitor[slot].label);
+        startBleBeacon(slot);
         pageNeedsRedraw = true;
       }
-    // Bottom row: Back (x<80) | Scan All (x<200) | Rename Slot (x>=200)  y: 198-240
+    // Bottom row: Back (x<80) | Transmit (x<205) | Stop (x>=205)  y: 198-240
     } else if (y >= 198) {
       if (x < 80) {
+        stopBleBeacon();
         navigateTo(Page::Fun);
-      } else if (x < 200) {
-        scanBleMonitor();
+      } else if (x < 205) {
+        startBleBeacon(bleSelectedPreset);
         pageNeedsRedraw = true;
       } else {
-        // Rename selected slot label via keyboard
-        startKeyboard(KeyboardTarget::None, "Slot Label", bleMonitor[bleMonitorSel].label, false);
-        // We use a small trick: finish lands on Home. Override with a lambda alternative:
-        // (Actual slot rename stored on keyboard return — handled in finishKeyboard default -> Home)
-        // For now: show toast explaining
-        showToast("Rename: type new label then SAVE");
+        stopBleBeacon();
+        pageNeedsRedraw = true;
       }
     }
 
