@@ -904,61 +904,11 @@ void pollWifi() {
 
 // ----- Bluetooth and infrared ---------------------------------------------------
 class ScanCallbacks : public NimBLEScanCallbacks {
-  bool isPairingMode = false;
   void onResult(const NimBLEAdvertisedDevice* advertised) override {
     if (bleCount >= 8) return;
     
-    // Check if device should be in pairing mode (e.g., when brought close to iPhone)
     String name = advertised->getName().c_str();
     if (!name.length()) name = advertised->getAddress().toString().c_str();
-    
-    // When we detect the "Saved BLE (5)" device, enter pairing mode
-    if (name == "Saved BLE (5)") {
-      isPairingMode = true;
-    } else if (isPairingMode) {
-      // Include proximity pairing message when in pairing mode
-      // Type: 0x07 (Proximity Pairing Message)
-      // Manufacturer Data: 0x0E20 (AirPods Pro model)
-      // Status: 0x62
-      // Connection State: 0x04
-      
-      // Create proximity pairing advertisement data
-      // According to Apple spec, this includes the standard proximity pairing message format
-      uint8_t adData[31]; // 31 bytes for manufacturer data
-      uint8_t adLength = 0;
-      
-      // Set up manufacturer data according to Apple spec
-      // Byte 0: 0x07 (Proximity Pairing Message type)
-      adData[0] = 0x07;
-      adLength++;
-      
-      // Bytes 1-2: Device Model (0x0E20 for AirPods Pro)
-      adData[1] = 0x0E;  // High byte
-      adData[2] = 0x20;  // Low byte
-      adLength += 2;
-      
-      // Bytes 3-...: Status and other fields
-      // Based on Apple proximity pairing message format
-      adData[3] = 0x62;  // Status bitfield (pairing mode)
-      adLength++;
-      
-      adData[4] = 0x04;  // Connection state
-      adLength++;
-      
-      // Remaining bytes for additional data (fill with zeros for now)
-      for (int i = adLength; i < 31; i++) {
-        adData[i] = 0x00;
-      }
-      
-      // Set the advertisement data
-      NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-      if (adv) {
-        // Create proper manufacturer data packet
-        NimBLEAdvertisementData advData;
-        advData.setManufacturerData((uint8_t*)adData, adLength);
-        adv->setAdvertisementData(advData);
-      }
-    }
     
     // Store the detected device
     bleEntries[bleCount].name = name;
