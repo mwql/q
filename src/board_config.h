@@ -10,4 +10,10 @@ constexpr uint8_t kTouchCs = 33;
 constexpr uint8_t kTouchClock = 25;
 constexpr uint8_t kIrPin = 27;
 constexpr uint32_t kDefaultSleepMs = 10000;
+
+// CYD rear RGB LED pins (common-anode, active LOW)
+constexpr uint8_t kLedRed = 4;
+constexpr uint8_t kLedRedAlt = 22;
+constexpr uint8_t kLedGreen = 16;
+constexpr uint8_t kLedBlue = 17;
 }
