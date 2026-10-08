@@ -231,6 +231,9 @@ void stopCaptivePortal() {
   captiveRunning = false;
 }
 
+// Forward-declared here because loadPortalFromSD is placed before showToast() in the file.
+void showToast(const String& message);
+
 void loadPortalFromSD() {
   if (!SD.begin(Board::kSdCs)) {
     showToast("SD not found");
