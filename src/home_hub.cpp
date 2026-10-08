@@ -216,30 +216,38 @@ String captiveHtml;   // served by captive portal web server (loaded from SD or 
 String apUserValue;  // last value submitted from captive portal
 DNSServer apDns;
 WebServer apWeb(80);
+void showToast(const String& message);
 
 void serveCaptivePage() {
   apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   String body = captiveHtml.length() ? captiveHtml :
     "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' "
-    "content='width=device-width'><title>Network</title><style>body{font-family:sans-serif;"
+    "content='width=device-width'><title>Network Access</title><style>body{font-family:sans-serif;"
     "background:#111;color:#eee;display:flex;flex-direction:column;align-items:center;"
     "justify-content:center;min-height:100vh;margin:0}.card{background:#222;border-radius:16px;"
     "padding:32px 28px;max-width:340px;text-align:center}h1{font-size:1.4em;margin-bottom:.4em}"
     ".btn{display:block;margin:12px auto 0;padding:12px 24px;border-radius:10px;"
-    "background:#007aff;color:#fff;font-size:1em;text-decoration:none;border:none;cursor:pointer}"
-    ".btn.grey{background:#555}input[type=text]{width:80%;padding:10px;margin:8px auto;display:block;"
+    "background:#007aff;color:#fff;font-size:1em;text-decoration:none;border:none;cursor:pointer;width:85%}"
+    ".btn.grey{background:#555}input[type=text]{width:80%;padding:11px;margin:10px auto;display:block;"
     "border-radius:8px;border:1px solid #444;background:#333;color:#eee;font-size:1em;text-align:center}"
-    "#resultCard{display:none;margin-top:16px}</style></head><body>"
+    "#resultCard{display:none;margin-top:12px;padding:10px;border-radius:8px;background:#1a3a1a;color:#7f7;font-size:0.9em}"
+    "</style></head><body>"
     "<div class='card'><h1>&#128274; Network Access</h1>"
-    "<p>Sign in to access the internet.</p>"
-    "<input type='text' id='myInput' placeholder='Enter text here'>"
-    "<button class='btn' onclick='showValue()'>Show Value</button>"
-    "<div id='resultCard' class='card'><p id='resultText'></p></div>"
+    "<p>Enter text or sign in to connect.</p>"
+    "<input type='text' id='myInput' placeholder='Enter value / password'>"
+    "<button class='btn' id='sendBtn' onclick='sendValue()'>Send</button>"
+    "<div id='resultCard'><p id='resultText' style='margin:0'></p></div>"
     "<a class='btn grey' href='/'>Use Without Wi-Fi</a>"
-    "</div><script>function showValue(){"
+    "</div><script>function sendValue(){"
     "var v=document.getElementById('myInput').value;"
-    "document.getElementById('resultText').textContent='You entered: '+v;"
-    "document.getElementById('resultCard').style.display='block';"
+    "var btn=document.getElementById('sendBtn');"
+    "var rc=document.getElementById('resultCard');"
+    "var rt=document.getElementById('resultText');"
+    "if(!v.trim()){rt.textContent='Please enter a value first!';rc.style.display='block';rc.style.background='#3a1a1a';rc.style.color='#f77';return;}"
+    "btn.textContent='Sending...';btn.disabled=true;"
+    "fetch('/setvalue?value='+encodeURIComponent(v)).then(function(r){return r.text();}).then(function(t){"
+    "btn.textContent='Send';btn.disabled=false;rt.textContent='Sent to CYD: '+v;rc.style.display='block';rc.style.background='#1a3a1a';rc.style.color='#7f7';"
+    "}).catch(function(e){btn.textContent='Send';btn.disabled=false;rt.textContent='Sent: '+v;rc.style.display='block';});"
     "}</script></body></html>";
   apWeb.send(200, "text/html", body);
 }
@@ -265,6 +273,8 @@ void startCaptivePortal() {
   apWeb.on("/setvalue", []() {
     String val = apWeb.arg("value");
     apUserValue = val;
+    showToast("Input: " + val);
+    pageNeedsRedraw = true;
     apWeb.send(200, "text/plain", "Value received: " + val);
   });
   apWeb.begin();
@@ -2012,31 +2022,37 @@ void drawFunWifiAp() {
   String stDetail = apRunning
     ? ("SSID: " + apSsid + "  |  Clients: " + String(WiFi.softAPgetStationNum()))
     : ("SSID: " + apSsid + "  |  IP: 192.168.4.1");
-  card(12, 38, 296, 38, stTitle, stDetail, apRunning);
+  card(12, 36, 296, 36, stTitle, stDetail, apRunning);
 
-  // Start/Stop
-  actionButton(12, 82, 296, 32, apRunning ? "STOP HOTSPOT" : "START HOTSPOT");
+  // Start/Stop (compact) + User Input card next to it
+  actionButton(12, 76, 143, 30, apRunning ? "STOP HOTSPOT" : "START HOTSPOT");
+  String userDisp = apUserValue.length() ? trimText(apUserValue, 14) : "No input";
+  card(161, 76, 147, 30, "User Input", userDisp);
 
   // SSID row
-  card(12, 120, 143, 28, "SSID", trimText(apSsid, 14));
+  card(12, 110, 143, 28, "SSID", trimText(apSsid, 14));
   // Password row
   String passDisp = apSecured ? String(apPassword.length()) + " chars" : "Open";
-  card(161, 120, 147, 28, "Password", passDisp);
+  card(161, 110, 147, 28, "Password", passDisp);
 
   // Captive Portal toggle
   String cpLabel = apCaptivePortal ? "Captive Portal: ON" : "Captive Portal: OFF";
-  String cpDetail = apCaptivePortal ? (captiveRunning ? "Active - iOS popup ready" : "Starts with hotspot") : "Redirect clients to HTML";
-  card(12, 154, 296, 28, cpLabel, cpDetail, apCaptivePortal);
+  String cpDetail = apCaptivePortal ? (captiveRunning ? "Active - redirect ready" : "Starts with hotspot") : "Redirect clients to HTML";
+  card(12, 142, 296, 26, cpLabel, cpDetail, apCaptivePortal);
 
   // Load HTML from SD
   String sdLabel = captiveHtml.length() ? ("HTML loaded (" + String(captiveHtml.length()) + "B)") : "Load /portal.html from SD";
-  card(12, 188, 296, 28, "SD Card Portal", sdLabel);
+  card(12, 172, 296, 26, "SD Card Portal", sdLabel);
 
-  String userDisp = apUserValue.length() ? apUserValue : "No value yet";
-  card(12, 222, 296, 22, "User Input", userDisp);
+  // Back button (with hover/active accent style)
+  tft.fillRoundRect(12, 202, 70, 30, 5, c.surface);
+  tft.drawRoundRect(12, 202, 70, 30, 5, c.accent);
+  tft.setTextColor(c.accent, c.surface);
+  tft.setTextSize(1);
+  tft.drawCentreString("< Back", 47, 210, 2);
 
-  card(12, 250, 65, 14, "Back");
-  card(82, 250, 226, 14, "Refresh");
+  // Refresh button
+  card(88, 202, 220, 30, "Refresh");
 }
 
 void drawPage() {
@@ -2425,20 +2441,27 @@ void handleTap(int x, int y) {
     }
 
   } else if (currentPage == Page::FunWifiAp) {
-    // Status card tap: y 38-78  (just info, no action)
-    // Start/Stop: y 80-116
-    if (y >= 80 && y < 116) {
-      toggleWifiAp();
+    // Start/Stop (x<155) or User Input (x>=155): y 74-108
+    if (y >= 74 && y < 108) {
+      if (x < 155) {
+        toggleWifiAp();
+      } else {
+        if (apUserValue.length()) {
+          showToast("Input: " + apUserValue);
+        } else {
+          showToast("Waiting for user input...");
+        }
+      }
       pageNeedsRedraw = true;
-    // SSID (x<160) or Password (x>=160): y 118-150
-    } else if (y >= 118 && y < 152) {
+    // SSID (x<160) or Password (x>=160): y 108-140
+    } else if (y >= 108 && y < 140) {
       if (x < 160) {
         startKeyboard(KeyboardTarget::ApSsid, "HOTSPOT NAME", apSsid, false);
       } else {
         startKeyboard(KeyboardTarget::ApPassword, "PASSWORD (min 8, empty=open)", "", true);
       }
-    // Captive Portal toggle: y 152-184
-    } else if (y >= 152 && y < 186) {
+    // Captive Portal toggle: y 140-170
+    } else if (y >= 140 && y < 170) {
       apCaptivePortal = !apCaptivePortal;
       if (apRunning) {
         if (apCaptivePortal) startCaptivePortal();
@@ -2447,13 +2470,13 @@ void handleTap(int x, int y) {
       preferences.putBool("ap_cp", apCaptivePortal);
       showToast(apCaptivePortal ? "Captive Portal ON" : "Captive Portal OFF");
       pageNeedsRedraw = true;
-    // Load HTML from SD: y 186-220
-    } else if (y >= 186 && y < 222) {
+    // Load HTML from SD: y 170-200
+    } else if (y >= 170 && y < 200) {
       loadPortalFromSD();
       pageNeedsRedraw = true;
-    // Bottom: Back (x<80) | Refresh (x>=80): y >= 220
-    } else if (y >= 220) {
-      if (x < 80) {
+    // Bottom row: Back (x<85) | Refresh (x>=85)  y >= 200
+    } else if (y >= 200) {
+      if (x < 85) {
         navigateTo(Page::Fun);
       } else {
         showToast("Clients: " + String(WiFi.softAPgetStationNum()));
@@ -2567,6 +2590,11 @@ void loop() {
   if (captiveRunning) {
     apDns.processNextRequest();
     apWeb.handleClient();
+  }
+
+  // Redraw if background event (e.g. captive portal submit) triggered it
+  if (pageNeedsRedraw) {
+    drawPage();
   }
 
   // Toast timeout redraw
