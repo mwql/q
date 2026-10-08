@@ -12,8 +12,6 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <NimBLEDevice.h>
-#include <esp_bt.h>
-#include <esp_gap_ble_api.h>
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
 #include <esp_wifi.h>
@@ -125,20 +123,18 @@ struct BleBeaconPreset {
 };
 
 // Raw BLE advertisement packets for Apple Continuity (Proximity Pairing).
-// Each array is the COMPLETE AD payload as sent over the air:
-//   [len] [0xFF Manufacturer Specific] [0x4C 0x00 Apple Company ID] [type] [len] [data...]
-// We send these via esp_ble_gap_config_adv_data_raw so nothing gets
-// added, removed, or corrupted by the library (avoids std::string 0x00 truncation).
+// These are the MANUFACTURER DATA bytes only (starting with 0x4C 0x00 Apple company ID).
+// NimBLE's setManufacturerData(uint8_t*, size_t) adds the 0xFF AD type + length header
+// automatically and does NOT truncate at 0x00 (unlike the std::string overload).
 
 // 1. AirPods Pro (model 0x0E20)
 static const uint8_t kAdvAirPodsPro[] = {
-  0x1e, 0xff,               // AD length=30, type=Manufacturer Specific
   0x4c, 0x00,               // Apple company ID (little-endian)
-  0x07, 0x19,               // Proximity Pairing, length=25
+  0x07, 0x19,               // Proximity Pairing type, length=25
   0x01, 0x0e, 0x20,         // device class + model 0x0E20 (AirPods Pro)
   0x75, 0xaa, 0x30,         // status/battery
   0x01, 0x00, 0x00, 0x45,   // extra status
-  0x12, 0x12, 0x12, 0x00,   // padding
+  0x12, 0x12, 0x12, 0x00,
   0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00
@@ -146,10 +142,9 @@ static const uint8_t kAdvAirPodsPro[] = {
 
 // 2. Apple AirTag (FindMy 0x12 offline beacon)
 static const uint8_t kAdvAirTag[] = {
-  0x1e, 0xff,               // AD length=30, type=Manufacturer Specific
-  0x4c, 0x00,               // Apple company ID
+  0x4c, 0x00,
   0x12, 0x19,               // FindMy type, length=25
-  0x00, 0x4d, 0x6e, 0x3b,   // status + key fragment
+  0x00, 0x4d, 0x6e, 0x3b,
   0x8a, 0x90, 0x11, 0x22,
   0x33, 0x44, 0x55, 0x66,
   0x77, 0x88, 0x99, 0xaa,
@@ -160,7 +155,6 @@ static const uint8_t kAdvAirTag[] = {
 
 // 3. AirPods Max (model 0x0A20)
 static const uint8_t kAdvAirPodsMax[] = {
-  0x1e, 0xff,
   0x4c, 0x00,
   0x07, 0x19,
   0x01, 0x0a, 0x20,
@@ -174,7 +168,6 @@ static const uint8_t kAdvAirPodsMax[] = {
 
 // 4. AirPods 3rd Gen (model 0x1320)
 static const uint8_t kAdvAirPods3[] = {
-  0x1e, 0xff,
   0x4c, 0x00,
   0x07, 0x19,
   0x01, 0x13, 0x20,
@@ -188,7 +181,6 @@ static const uint8_t kAdvAirPods3[] = {
 
 // 5. Apple TV Setup (model 0x0F20)
 static const uint8_t kAdvAppleTv[] = {
-  0x1e, 0xff,
   0x4c, 0x00,
   0x07, 0x19,
   0x07, 0x0f, 0x20,
@@ -201,11 +193,11 @@ static const uint8_t kAdvAppleTv[] = {
 };
 
 const BleBeaconPreset blePresets[5] = {
-  {"AirPods Pro",     "Proximity Pair Popup",              kAdvAirPodsPro, sizeof(kAdvAirPodsPro)},
-  {"Apple AirTag",    "FindMy Beacon Signal",              kAdvAirTag,     sizeof(kAdvAirTag)},
-  {"AirPods Max",     "Proximity Pair Popup",              kAdvAirPodsMax, sizeof(kAdvAirPodsMax)},
-  {"AirPods 3rd Gen", "Proximity Pair Popup",              kAdvAirPods3,   sizeof(kAdvAirPods3)},
-  {"Apple TV Setup",  "Proximity Pair Popup (like AirPods)",kAdvAppleTv,   sizeof(kAdvAppleTv)}
+  {"AirPods Pro",     "Proximity Pair Popup",               kAdvAirPodsPro, sizeof(kAdvAirPodsPro)},
+  {"Apple AirTag",    "FindMy Beacon Signal",               kAdvAirTag,     sizeof(kAdvAirTag)},
+  {"AirPods Max",     "Proximity Pair Popup",               kAdvAirPodsMax, sizeof(kAdvAirPodsMax)},
+  {"AirPods 3rd Gen", "Proximity Pair Popup",               kAdvAirPods3,   sizeof(kAdvAirPods3)},
+  {"Apple TV Setup",  "Proximity Pair Popup (like AirPods)",kAdvAppleTv,    sizeof(kAdvAppleTv)}
 };
 
 bool bleTransmitting = false;
@@ -1268,24 +1260,9 @@ void toggleWifiAp() {
   }
 }
 
-// Raw BLE advertising helpers ---------------------------------------------------
-// These bypass NimBLE's high-level API to avoid two bugs:
-//  1. std::string truncates payload at first 0x00 byte
-//  2. setManufacturerData() prepends company-ID, doubling the 0x4C 0x00
-
-static const esp_ble_adv_params_t kBleAdvParams = {
-  .adv_int_min        = 0x20,  // 20 ms
-  .adv_int_max        = 0x40,  // 40 ms
-  .adv_type           = ADV_TYPE_NONCONN_IND,
-  .own_addr_type      = BLE_ADDR_TYPE_RANDOM,
-  .peer_addr          = {0},
-  .peer_addr_type     = BLE_ADDR_TYPE_PUBLIC,
-  .channel_map        = ADV_CHNL_ALL,
-  .adv_filter_policy  = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-};
-
 void stopBleBeacon() {
-  esp_ble_gap_stop_advertising();
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  if (adv && adv->isAdvertising()) adv->stop();
   bleTransmitting = false;
   showToast("BLE signal stopped");
 }
@@ -1294,30 +1271,27 @@ void startBleBeacon(uint8_t idx) {
   if (idx >= 5) return;
   bleSelectedPreset = idx;
 
-  // Stop any active NimBLE scan so the radio is free
+  // Stop any active scan so the radio is free
   NimBLEScan* sc = NimBLEDevice::getScan();
   if (sc && sc->isScanning()) sc->stop();
 
-  // Stop any previous raw advertising
-  esp_ble_gap_stop_advertising();
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  if (adv->isAdvertising()) adv->stop();
 
-  // Randomise MAC so iOS doesn't filter duplicate advertisements
-  esp_bd_addr_t rndAddr;
-  esp_fill_random(rndAddr, sizeof(rndAddr));
-  rndAddr[0] = (rndAddr[0] & 0x3F) | 0xC0; // Set top 2 bits: static random address
-  esp_ble_gap_set_rand_addr(rndAddr);
+  // Randomise MAC so iOS doesn't filter a repeated static packet
+  NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
 
-  // Maximum TX power for range
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
+  // Max TX power
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-  // Push the complete raw AD payload (no library wrapping)
-  esp_ble_gap_config_adv_data_raw(
-    const_cast<uint8_t*>(blePresets[idx].payload),
-    (uint8_t)blePresets[idx].payloadLen
-  );
+  NimBLEAdvertisementData advData;
+  // Use uint8_t* overload — does NOT truncate at 0x00 unlike std::string
+  advData.setManufacturerData(blePresets[idx].payload, blePresets[idx].payloadLen);
 
-  // Start advertising — actual start fires after adv_data_raw callback
-  esp_ble_gap_start_advertising(const_cast<esp_ble_adv_params_t*>(&kBleAdvParams));
+  adv->setAdvertisementData(advData);
+  adv->setMinInterval(32);  // 20 ms
+  adv->setMaxInterval(64);  // 40 ms
+  adv->start();
 
   bleTransmitting = true;
   showToast("Transmitting " + String(blePresets[idx].label));
