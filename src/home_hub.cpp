@@ -99,17 +99,45 @@ uint8_t wifiCount = 0;
 BleEntry bleEntries[8];
 Device devices[20];
 
-// Rear RGB LED control
-void setRearLedGreen(bool on) {
-  pinMode(Board::kLedRed, OUTPUT);
-  pinMode(Board::kLedRedAlt, OUTPUT);
-  pinMode(Board::kLedBlue, OUTPUT);
-  pinMode(Board::kLedGreen, OUTPUT);
+// 0=Off  1=Red  2=Green  3=Blue  4=White
+uint8_t ledColorIndex = 2;  // default: green
 
-  digitalWrite(Board::kLedRed, HIGH);     // Active-low: HIGH turns off red
-  digitalWrite(Board::kLedRedAlt, HIGH);  // Active-low: HIGH turns off red alt
-  digitalWrite(Board::kLedBlue, HIGH);    // Active-low: HIGH turns off blue
-  digitalWrite(Board::kLedGreen, on ? LOW : HIGH); // Active-low: LOW turns ON green
+// Rear RGB LED control (common-anode, active-LOW)
+void applyLedColor() {
+  pinMode(Board::kLedRed,    OUTPUT);
+  pinMode(Board::kLedRedAlt, OUTPUT);
+  pinMode(Board::kLedBlue,   OUTPUT);
+  pinMode(Board::kLedGreen,  OUTPUT);
+  // All off first
+  digitalWrite(Board::kLedRed,    HIGH);
+  digitalWrite(Board::kLedRedAlt, HIGH);
+  digitalWrite(Board::kLedBlue,   HIGH);
+  digitalWrite(Board::kLedGreen,  HIGH);
+  switch (ledColorIndex) {
+    case 1: // Red
+      digitalWrite(Board::kLedRed,    LOW);
+      digitalWrite(Board::kLedRedAlt, LOW);
+      break;
+    case 2: // Green
+      digitalWrite(Board::kLedGreen,  LOW);
+      break;
+    case 3: // Blue
+      digitalWrite(Board::kLedBlue,   LOW);
+      break;
+    case 4: // White (all on)
+      digitalWrite(Board::kLedRed,    LOW);
+      digitalWrite(Board::kLedRedAlt, LOW);
+      digitalWrite(Board::kLedGreen,  LOW);
+      digitalWrite(Board::kLedBlue,   LOW);
+      break;
+    default: break; // 0 = Off, already all HIGH
+  }
+}
+
+// Legacy helper used by status indicators
+void setRearLedGreen(bool on) {
+  if (on) { ledColorIndex = 2; } else { ledColorIndex = 0; }
+  applyLedColor();
 }
 
 // ----- Fun Tools Data Structures & Declarations -----
@@ -382,6 +410,7 @@ void saveSettings() {
   preferences.putString("ap_ssid", apSsid);
   preferences.putString("ap_pass", apPassword);
   preferences.putBool("ap_cp",   apCaptivePortal);
+  preferences.putUChar("led_color", ledColorIndex);
 }
 
 void loadSettings() {
@@ -403,6 +432,9 @@ void loadSettings() {
   apSsid          = preferences.getString("ap_ssid", "CYD-Hotspot");
   apPassword      = preferences.getString("ap_pass",  "12345678");
   apCaptivePortal = preferences.getBool("ap_cp", false);
+  ledColorIndex   = preferences.getUChar("led_color", 2);
+  if (ledColorIndex > 4) ledColorIndex = 2;
+  applyLedColor();
 
   // Pre-seed default eWeLink light so device screen is ready immediately
   if (deviceCount == 0) {
@@ -1778,30 +1810,35 @@ void drawSettings() {
 
   // Theme
   String themeName = themeIndex == 0 ? "Ocean" : "Midnight";
-  card(12, 42, 296, 30, "Theme", themeName + " - tap to change");
+  card(12, 36, 296, 28, "Theme", themeName + " - tap to change");
 
   // Sleep
-  card(12, 76, 296, 30, "Screen Sleep", sleepLabel() + " - tap to change");
+  card(12, 68, 296, 28, "Screen Sleep", sleepLabel() + " - tap to change");
 
   // Timezone
   String zone = "UTC" + String(utcOffset >= 0 ? "+" : "") + String(utcOffset);
-  card(12, 110, 296, 30, "Timezone", zone + " - tap to change");
+  card(12, 100, 296, 28, "Timezone", zone + " - tap to change");
+
+  // LED backlight colour
+  static const char* kLedNames[] = {"Off", "Red", "Green", "Blue", "White"};
+  card(12, 132, 296, 28, "LED Backlight",
+       String(kLedNames[ledColorIndex]) + " - tap to change");
 
   // Cloud API shortcut
-  card(12, 144, 296, 30, "Cloud API",
+  card(12, 164, 296, 28, "Cloud API",
        bridgeUrl.length() ? trimText(bridgeUrl, 28) : "Not configured");
 
   // Forget Wi-Fi
-  card(12, 178, 296, 30, "Forget Wi-Fi", "Clear saved network");
+  card(12, 196, 296, 28, "Forget Wi-Fi", "Clear saved network");
 
   // Bottom
-  card(12, 214, 68, 22, "Back");
+  card(12, 228, 68, 20, "Back");
 
   // Version + memory info
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
   String info = "v" FW_VERSION " | " + String(ESP.getFreeHeap() / 1024) + "KB free";
-  tft.drawRightString(info, 308, 218, 1);
+  tft.drawRightString(info, 308, 232, 1);
 }
 
 void drawBridge() {
@@ -2259,28 +2296,34 @@ void handleTap(int x, int y) {
       navigateTo(Page::Home);
     }
   } else if (currentPage == Page::Settings) {
-    if (y >= 42 && y < 72) {
+    if (y >= 36 && y < 64) {
       themeIndex = (themeIndex + 1) % kThemeCount;
       saveSettings();
       pageNeedsRedraw = true;
-    } else if (y >= 76 && y < 106) {
+    } else if (y >= 68 && y < 96) {
       sleepIndex = (sleepIndex + 1) % 4;
       saveSettings();
       showToast("Sleep: " + sleepLabel());
       pageNeedsRedraw = true;
-    } else if (y >= 110 && y < 140) {
+    } else if (y >= 100 && y < 128) {
       utcOffset = utcOffset >= 14 ? -12 : utcOffset + 1;
       ntpStarted = false;
       startClock();
       saveSettings();
       pageNeedsRedraw = true;
-    } else if (y >= 144 && y < 174) {
+    } else if (y >= 132 && y < 160) {
+      // LED backlight colour cycle: Off -> Red -> Green -> Blue -> White -> Off
+      ledColorIndex = (ledColorIndex + 1) % 5;
+      applyLedColor();
+      saveSettings();
+      pageNeedsRedraw = true;
+    } else if (y >= 164 && y < 192) {
       navigateTo(Page::Bridge);
-    } else if (y >= 178 && y < 208) {
+    } else if (y >= 196 && y < 224) {
       WiFi.disconnect(true, true);
       showToast("Wi-Fi credentials cleared");
       pageNeedsRedraw = true;
-    } else if (y >= 214) {
+    } else if (y >= 228) {
       navigateTo(Page::Home);
     }
   } else if (currentPage == Page::Bridge) {
