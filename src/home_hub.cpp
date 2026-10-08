@@ -902,8 +902,34 @@ void pollWifi() {
 
 // ----- Bluetooth and infrared ---------------------------------------------------
 class ScanCallbacks : public NimBLEScanCallbacks {
+  bool isPairingMode = false;
   void onResult(const NimBLEAdvertisedDevice* advertised) override {
     if (bleCount >= 8) return;
+    
+    // Check if device should be in pairing mode (e.g., when brought close to iPhone)
+    if (advertised->getName().c_str() == "Saved BLE (5)") {
+      isPairingMode = true;
+    } else if (isPairingMode) {
+      // Include proximity pairing message when in pairing mode
+      // Type: 0x07 (Proximity Pairing Message)
+      // Manufacturer Data: 0x0E20 (AirPods Pro model)
+      // Status: 0x62
+      // Connection State: 0x04
+      
+      // Create proximity pairing advertisement data
+      uint8_t adData[21];
+      adData[0] = 0x07; // Proximity Pairing Message type
+      adData[1] = 0x0E20; // AirPods Pro model
+      adData[2] = 0x62; // Status bitfield
+      adData[3] = 0x04; // Connection state
+      
+      // Set the advertisement packet
+      NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+      if (adv) {
+        adv->setAdvertisingData(adData);
+      }
+    }
+    
     String name = advertised->getName().c_str();
     if (!name.length()) name = advertised->getAddress().toString().c_str();
     bleEntries[bleCount].name = name;
