@@ -33,7 +33,7 @@ enum class Page : uint8_t {
   FunWifiIds, FunFlock, FunTrackers, FunSavedBle, FunWifiAttack, FunWifiAp
 };
 enum class KeyboardTarget : uint8_t {
-  None, WifiPassword, BridgeUrl, BridgeKey, IrCode, ApSsid, ApPassword
+  None, WifiPassword, BridgeUrl, BridgeKey, IrCode, ApSsid, ApPassword, UserInput
 };
 enum class KeyboardMode : uint8_t { Lower, Upper, Symbols };
 
@@ -95,6 +95,7 @@ String keyboardTitle;
 String keyboardValue;
 String bridgeUrl = "https://bott-r34h.onrender.com";
 String bridgeKey;
+String attackUserValue = "";
 String irCode = "20DF10EF";
 String wifiNames[12];
 int32_t wifiRssi[12];
@@ -1520,23 +1521,28 @@ void finishKeyboard() {
       }
       currentPage = Page::FunWifiAp;
       break;
-    case KeyboardTarget::ApPassword:
-      if (keyboardValue.length() >= 8) {
-        apPassword = keyboardValue;
-        apSecured = true;
-        preferences.putString("ap_pass", apPassword);
-        if (apRunning) restartAp();
-        showToast("Password updated");
-      } else if (keyboardValue.length() == 0) {
-        apSecured = false;
-        if (apRunning) restartAp();
-        showToast("Password removed (open AP)");
-      } else {
-        showToast("Min 8 chars required");
-      }
-      currentPage = Page::FunWifiAp;
-      break;
-    default:
+     case KeyboardTarget::ApPassword:
+       if (keyboardValue.length() >= 8) {
+         apPassword = keyboardValue;
+         apSecured = true;
+         preferences.putString("ap_pass", apPassword);
+         if (apRunning) restartAp();
+         showToast("Password updated");
+       } else if (keyboardValue.length() == 0) {
+         apSecured = false;
+         if (apRunning) restartAp();
+         showToast("Password removed (open AP)");
+       } else {
+         showToast("Min 8 chars required");
+       }
+       currentPage = Page::FunWifiAp;
+       break;
+     case KeyboardTarget::UserInput:
+       attackUserValue = keyboardValue;
+       showToast("User input saved: " + attackUserValue);
+       currentPage = Page::FunWifiAttack;
+       break;
+     default:
       currentPage = Page::Home;
       break;
   }
@@ -2078,7 +2084,7 @@ void drawFunWifiAttack() {
   drawStatusBar("WIFI ATTACK - SELECT TARGET");
 
   // Row 1: Target & Status info cards (y: 38, h: 44)
-  String targetDetail = selectedAttackSsid.length() > 0 ? trimText(selectedAttackSsid, 16) : (wifiCount > 0 ? "Tap Select" : "Tap Scan");
+  String targetDetail = selectedAttackSsid.length() > 0 ? selectedAttackSsid : (wifiCount > 0 ? "Tap Select" : "Tap Scan");
   card(10, 38, 145, 44, "SELECTED TARGET", targetDetail);
 
   String attackDetail = wifiAttackActive ? "ACTIVE - Rogue AP" : (wifiScanInProgress ? "Scanning..." : (String(wifiCount) + " nets"));
@@ -2088,18 +2094,21 @@ void drawFunWifiAttack() {
   actionButton(10, 86, 145, 44, wifiScanInProgress ? "SCANNING..." : "SCAN NETWORKS");
   actionButton(165, 86, 145, 44, "SELECT TARGET");
 
-  // Row 3: Start / Stop Attack button (y: 134, h: 48)
+  // Row 3: User Input & Start/Stop Attack (y: 134, h: 44)
+  String userDisp = attackUserValue.length() ? trimText(attackUserValue, 16) : "No input";
+  card(10, 134, 145, 44, "USER INPUT", userDisp);
+  
   String attackBtnLabel = "SELECT TARGET FIRST";
   if (wifiAttackActive) {
     attackBtnLabel = "STOP ATTACK";
   } else if (selectedAttackSsid.length() > 0) {
     attackBtnLabel = "START ATTACK";
   }
-  actionButton(10, 134, 300, 48, attackBtnLabel);
+  actionButton(165, 134, 145, 44, attackBtnLabel);
 
-  // Row 4: Navigation (y: 186, h: 46)
-  card(10, 186, 145, 46, "Back");
-  card(165, 186, 145, 46, "Home");
+  // Row 4: Navigation (y: 182, h: 46)
+  card(10, 182, 145, 46, "Back");
+  card(165, 182, 145, 46, "Home");
 }
 void drawFunWifiAp() {
   const Theme& c = theme();
@@ -2568,21 +2577,52 @@ void handleTap(int x, int y) {
           pageNeedsRedraw = true;
         }
       }
-    // Row 3: START ATTACK / STOP ATTACK  y: 132 to 184
+    // Row 3: User Input (x < 160) | Start/Stop Attack (x >= 160)  y: 132 to 184
     } else if (y >= 132 && y < 184) {
-      if (wifiAttackActive) {
-        stopWifiAttack();
-        pageNeedsRedraw = true;
-      } else if (selectedAttackSsid.length() > 0) {
-        wifiAttackActive = true;
-        WiFi.disconnect(true, false);
-        delay(50);
-        WiFi.mode(WIFI_AP_STA);
-        WiFi.softAP(selectedAttackSsid.c_str());
-        showToast("Rogue AP started: " + selectedAttackSsid);
-        pageNeedsRedraw = true;
+      if (x < 160) {
+        // User Input box tapped
+        startKeyboard(KeyboardTarget::UserInput, "USER INPUT", attackUserValue, false);
       } else {
-        showToast("Select a target first!");
+        // Start/Stop Attack button
+        if (wifiAttackActive) {
+          stopWifiAttack();
+          pageNeedsRedraw = true;
+        } else if (selectedAttackSsid.length() > 0) {
+          // IMPROVED DEAUTH ATTACK STARTS HERE
+          wifiAttackActive = true;
+          
+          // First, deauthenticate from any current connection
+          WiFi.disconnect(true, false);
+          delay(100);
+          
+          // Set to AP_STA mode to allow both AP and station functions
+          WiFi.mode(WIFI_AP_STA);
+          
+          // Configure for maximum deauth effectiveness
+          WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maximum transmit power
+          
+          // Start the rogue AP (open network - no password)
+          bool apStarted = WiFi.softAP(selectedAttackSsid.c_str());
+          
+          if (apStarted) {
+            showToast("Rogue AP started: " + selectedAttackSsid);
+            
+            // Optional: Start a continuous deauth attack in background
+            // Note: For a more aggressive attack, we could send deauth frames here
+            // but that requires lower-level WiFi functions
+            
+            // Small delay to let AP stabilize
+            delay(200);
+          } else {
+            showToast("Failed to start AP");
+            wifiAttackActive = false;
+          }
+          // IMPROVED DEAUTH ATTACK ENDS HERE
+          
+          pageNeedsRedraw = true;
+        } else {
+          showToast("Select a target first!");
+        }
       }
     // Row 4: Back (x < 160) | Home (x >= 160)  y: 184 to 240
     } else if (y >= 184) {
