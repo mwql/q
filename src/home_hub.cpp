@@ -2073,65 +2073,34 @@ void drawFunBleMonitor() {
 }
 
 void drawFunWifiAttack() {
-   const Theme& c = theme();
-   tft.fillScreen(c.background);
-   drawStatusBar("WIFI ATTACK - SELECT TARGET");
-   
-   // Show scan status or results
-   if (wifiScanInProgress) {
-      card(12, 40, 296, 44, "Scanning...", String(wifiCount) + " networks found");
-   } else if (wifiCount == 0) {
-      card(12, 40, 296, 44, "No networks found",
-             "Tap Scan to search for WiFi networks");
-   } else {
-      card(12, 40, 296, 44, "Available Networks",
-             String(wifiCount) + " networks found");
-   }
-   
-   // Show selected target
-   if (selectedAttackSsid.length() > 0) {
-      card(12, 88, 296, 44, "SELECTED TARGET",
-             selectedAttackSsid);
-   } else {
-      card(12, 88, 296, 44, "SELECTED TARGET",
-             "None selected");
-   }
-   
-   // Show attack status
-   if (wifiAttackActive) {
-      card(12, 136, 296, 44, "ATTACK STATUS",
-             "ACTIVE - Rogue AP running");
-   } else {
-      card(12, 136, 296, 44, "ATTACK STATUS",
-             "Idle");
-   }
-   
-   // Action buttons
-   if (!wifiScanInProgress) {
-      actionButton(12, 184, 140, 40, "SCAN NETWORKS");
-   } else {
-      actionButton(12, 184, 140, 40, "SCANNING...");
-   }
-   
-   if (wifiCount > 0 && !wifiScanInProgress) {
-      actionButton(158, 184, 150, 40, "SELECT TARGET");
-   } else {
-      actionButton(158, 184, 150, 40, "SELECT TARGET");
-   }
-   
-   if (selectedAttackSsid.length() > 0 && !wifiAttackActive) {
-      actionButton(12, 232, 296, 40, "START ATTACK");
-   } else if (wifiAttackActive) {
-      actionButton(12, 232, 296, 40, "STOP ATTACK");
-   } else {
-      actionButton(12, 232, 296, 40, "SELECT TARGET FIRST");
-   }
-   
-   // Navigation
-   card(12, 284, 140, 34, "Back");
-   card(158, 284, 140, 34, "Home");
-}
+  const Theme& c = theme();
+  tft.fillScreen(c.background);
+  drawStatusBar("WIFI ATTACK - SELECT TARGET");
 
+  // Row 1: Target & Status info cards (y: 38, h: 44)
+  String targetDetail = selectedAttackSsid.length() > 0 ? trimText(selectedAttackSsid, 16) : (wifiCount > 0 ? "Tap Select" : "Tap Scan");
+  card(10, 38, 145, 44, "SELECTED TARGET", targetDetail);
+
+  String attackDetail = wifiAttackActive ? "ACTIVE - Rogue AP" : (wifiScanInProgress ? "Scanning..." : (String(wifiCount) + " nets"));
+  card(165, 38, 145, 44, "ATTACK STATUS", attackDetail, wifiAttackActive);
+
+  // Row 2: Action buttons (y: 86, h: 44)
+  actionButton(10, 86, 145, 44, wifiScanInProgress ? "SCANNING..." : "SCAN NETWORKS");
+  actionButton(165, 86, 145, 44, "SELECT TARGET");
+
+  // Row 3: Start / Stop Attack button (y: 134, h: 48)
+  String attackBtnLabel = "SELECT TARGET FIRST";
+  if (wifiAttackActive) {
+    attackBtnLabel = "STOP ATTACK";
+  } else if (selectedAttackSsid.length() > 0) {
+    attackBtnLabel = "START ATTACK";
+  }
+  actionButton(10, 134, 300, 48, attackBtnLabel);
+
+  // Row 4: Navigation (y: 186, h: 46)
+  card(10, 186, 145, 46, "Back");
+  card(165, 186, 145, 46, "Home");
+}
 void drawFunWifiAp() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
@@ -2541,98 +2510,89 @@ void handleTap(int x, int y) {
 
 
 } else if (currentPage == Page::FunWifiAttack) {
-     // Row 1: y 40-88  Row 2: y 88-136  Row 3: y 136-184  Row 4: y 184-232  Row 5: y 232-280  Nav: y>=280
-     if (y >= 40 && y < 88) {
-       if (!wifiScanInProgress) {
-         if (x < 150) {
-           // SCAN NETWORKS button
-           wifiScanInProgress = true;
-           wifiOffset = 0;
-           wifiCount = 0;
-           scanWifi();
-           wifiScanInProgress = false;
-           pageNeedsRedraw = true;
-         } else {
-           // SELECT TARGET button (disabled during scan)
-           showToast("Please wait for scan to complete");
-         }
-       } else {
-         // SCANNING... button (disabled)
-         showToast("Scan in progress...");
-       }
-     } else if (y >= 88 && y < 136) {
-       if (x < 150) {
-         // SELECT TARGET button
-         if (wifiCount > 0 && !wifiScanInProgress) {
-           // Show network selection UI (similar to wifi page)
-           // For simplicity, we'll just select the first network for now
-           // In a full implementation, this would show a list to choose from
-           if (wifiCount > 0) {
-             selectedAttackSsid = wifiNames[0];
-             showToast("Selected: " + selectedAttackSsid);
-           } else {
-             showToast("No networks available");
-           }
-         } else if (wifiScanInProgress) {
-           showToast("Please wait for scan to complete");
-         } else {
-           showToast("No networks to select");
-         }
-       } else {
-         // Second button in row 2 - not used for now
-       }
-     } else if (y >= 136 && y < 184) {
-       // Row 3 - not used for now
-     } else if (y >= 184 && y < 232) {
-       // Row 4: Action buttons
-       if (x < 150) {
-         if (wifiScanInProgress) {
-           // SCANNING... button
-           showToast("Scan in progress...");
-         } else {
-           // SELECT TARGET button
-           showToast("Please select a target network");
-         }
-       } else {
-         // START/STOP ATTACK button
-         if (selectedAttackSsid.length() > 0 && !wifiAttackActive) {
-           // START ATTACK
-           wifiAttackActive = true;
-           // Deauthenticate current connection
-           WiFi.disconnect(true, false);
-           delay(50);
-           WiFi.mode(WIFI_STA);
-           WiFi.setTxPower(WIFI_POWER_19_5dBm);
-           WiFi.setAutoReconnect(true);
-           WiFi.persistent(true);
-           // Connect to target network (to get channel info for deauth)
-           WiFi.begin(selectedAttackSsid.c_str(), "");
-           showToast("Connecting to " + selectedAttackSsid + "...");
-           // Note: We don't wait for connection as we'll start AP regardless
-           // The attack works by creating a rogue AP with the same SSID
-           // Start the rogue AP (open network - no password)
-           WiFi.softAP(selectedAttackSsid.c_str());
-           showToast("Attack started! Rogue AP: " + selectedAttackSsid);
-         } else if (wifiAttackActive) {
-           // STOP ATTACK
-           wifiAttackActive = false;
-           WiFi.softAPdisconnect(true);
-           showToast("Attack stopped");
-         } else {
-           showToast("Please select a target network first");
-         }
-       }
-     } else if (y >= 232 && y < 280) {
-       // Row 5: Additional buttons (not used for now)
-     } else if (y >= 280) {
-       // Navigation
-       if (x < 150) {
-         navigateTo(Page::Fun);
-       } else {
-         navigateTo(Page::Home);
-       }
-     }
-   } else if (currentPage == Page::FunWifiAp) {
+    // Row 1: Target card (x < 160) or Status card (x >= 160)  y: 36 to 84
+    if (y >= 36 && y < 84) {
+      if (x < 160) {
+        if (wifiCount > 0) {
+          int currentIdx = -1;
+          for (uint8_t i = 0; i < wifiCount; ++i) {
+            if (wifiNames[i] == selectedAttackSsid) {
+              currentIdx = i;
+              break;
+            }
+          }
+          currentIdx = (currentIdx + 1) % wifiCount;
+          selectedAttackSsid = wifiNames[currentIdx];
+          showToast("Target: " + selectedAttackSsid);
+          pageNeedsRedraw = true;
+        } else {
+          showToast("Tap Scan Networks first");
+        }
+      } else {
+        if (wifiAttackActive) {
+          showToast("Attack is active (Rogue AP)");
+        } else {
+          showToast(String(wifiCount) + " networks scanned");
+        }
+      }
+    // Row 2: Scan Networks (x < 160) | Select Target (x >= 160)  y: 84 to 132
+    } else if (y >= 84 && y < 132) {
+      if (x < 160) {
+        if (!wifiScanInProgress) {
+          wifiScanInProgress = true;
+          scanWifi();
+          wifiScanInProgress = false;
+          if (wifiCount > 0 && selectedAttackSsid.length() == 0) {
+            selectedAttackSsid = wifiNames[0];
+          }
+          pageNeedsRedraw = true;
+        } else {
+          showToast("Scan in progress...");
+        }
+      } else {
+        if (wifiScanInProgress) {
+          showToast("Please wait for scan to finish");
+        } else if (wifiCount == 0) {
+          showToast("No networks. Tap Scan first");
+        } else {
+          int currentIdx = -1;
+          for (uint8_t i = 0; i < wifiCount; ++i) {
+            if (wifiNames[i] == selectedAttackSsid) {
+              currentIdx = i;
+              break;
+            }
+          }
+          currentIdx = (currentIdx + 1) % wifiCount;
+          selectedAttackSsid = wifiNames[currentIdx];
+          showToast("Target: " + selectedAttackSsid);
+          pageNeedsRedraw = true;
+        }
+      }
+    // Row 3: START ATTACK / STOP ATTACK  y: 132 to 184
+    } else if (y >= 132 && y < 184) {
+      if (wifiAttackActive) {
+        stopWifiAttack();
+        pageNeedsRedraw = true;
+      } else if (selectedAttackSsid.length() > 0) {
+        wifiAttackActive = true;
+        WiFi.disconnect(true, false);
+        delay(50);
+        WiFi.mode(WIFI_AP_STA);
+        WiFi.softAP(selectedAttackSsid.c_str());
+        showToast("Rogue AP started: " + selectedAttackSsid);
+        pageNeedsRedraw = true;
+      } else {
+        showToast("Select a target first!");
+      }
+    // Row 4: Back (x < 160) | Home (x >= 160)  y: 184 to 240
+    } else if (y >= 184) {
+      if (x < 160) {
+        navigateTo(Page::Fun);
+      } else {
+        navigateTo(Page::Home);
+      }
+    }
+  } else if (currentPage == Page::FunWifiAp) {
     // Start/Stop (x<155) or User Input (x>=155): y 74-108
     if (y >= 74 && y < 108) {
       if (x < 155) {
