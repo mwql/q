@@ -384,50 +384,6 @@ void loadPortalFromSD() {
   showToast("Portal HTML loaded (" + String(captiveHtml.length()) + "B)");
 }
 
-void drawFun();
-void drawFunWifiIds();
-void drawFunWifiIdsLive();
-void drawFunFlock();
-void drawFunTrackers();
-void drawFunBleMonitor();
-void drawFunNetStats();
-void drawFunWifiAp();
-
-void drawFun() {
-  const Theme& c = theme();
-  tft.fillScreen(c.background);
-  
-  // Draw Fun header with "WIFI ATTACK DETECTED" message
-  String attackText = "WIFI ATTACK DETECTED";
-  tft.fillRoundRect(12, 44, 68, 22, 5, c.surfaceRaised);
-  tft.drawCentreString(attackText, 160, 220, 2);
-  
-  // Draw Fun icons
-  drawWifiIcon(12, 44, 4, c.surfaceRaised);
-  drawWifiIcon(84, 44, 4, c.surfaceRaised);
-  drawWifiIcon(156, 44, 4, c.surfaceRaised);
-  
-   // Draw cloned SSID
-   tft.fillRoundRect(220, 44, 68, 22, 5, c.surfaceRaised);
-   tft.drawCentreString(selectedSsid, 260, 220, 2);
-   
-   // Stop Button - stops the WiFi attack
-   tft.fillRoundRect(300, 44, 68, 22, 5, c.surfaceRaised);
-   tft.drawCentreString("STOP", 340, 220, 2);
-  
-  // Draw buttons for joining saved networks
-  drawButton("JOIN", 12, 210, 148, c.surfaceRaised);
-  drawButton("SAVE", 160, 210, 148, c.surfaceRaised);
-}
-
-void drawFunWifiIds() {}
-void drawFunWifiIdsLive() {}
-void drawFunFlock() {}
-void drawFunTrackers() {}
-void drawFunBleMonitor() {}
-void drawFunNetStats() {}
-void drawFunWifiAp() {}
-
 constexpr uint32_t kSleepChoices[] = {10000, 30000, 60000, 0};
 constexpr char kLowerRows[][11] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
 constexpr char kUpperRows[][11] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
