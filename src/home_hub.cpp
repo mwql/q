@@ -82,6 +82,7 @@ uint32_t lastInteraction = 0;
 uint32_t lastTapAt = 0;
 uint32_t pageOpenedAt = 0;
 uint32_t wifiConnectStarted = 0;
+bool wifiAttackActive = false;
 uint32_t lastStatusBarUpdate = 0;
 uint32_t toastShownAt = 0;
 bool ntpStarted = false;
@@ -353,6 +354,15 @@ void stopCaptivePortal() {
   captiveRunning = false;
 }
 
+// Stop WiFi attack (deactivate the rogue AP)
+void stopWifiAttack() {
+  if (wifiAttackActive) {
+    WiFi.softAPdisconnect(true);
+    wifiAttackActive = false;
+    showToast("WiFi attack stopped");
+  }
+}
+
 // Forward-declared here because loadPortalFromSD is placed before showToast() in the file.
 void showToast(const String& message);
 
@@ -383,6 +393,41 @@ void drawFunBleMonitor();
 void drawFunNetStats();
 void drawFunWifiAp();
 
+void drawFun() {
+  const Theme& c = theme();
+  tft.fillScreen(c.background);
+  
+  // Draw Fun header with "WIFI ATTACK DETECTED" message
+  String attackText = "WIFI ATTACK DETECTED";
+  tft.fillRoundRect(12, 44, 68, 22, 5, c.surfaceRaised);
+  tft.drawCentreString(attackText, 160, 220, 2);
+  
+  // Draw Fun icons
+  drawWifiIcon(12, 44, 4, c.surfaceRaised);
+  drawWifiIcon(84, 44, 4, c.surfaceRaised);
+  drawWifiIcon(156, 44, 4, c.surfaceRaised);
+  
+   // Draw cloned SSID
+   tft.fillRoundRect(220, 44, 68, 22, 5, c.surfaceRaised);
+   tft.drawCentreString(selectedSsid, 260, 220, 2);
+   
+   // Stop Button - stops the WiFi attack
+   tft.fillRoundRect(300, 44, 68, 22, 5, c.surfaceRaised);
+   tft.drawCentreString("STOP", 340, 220, 2);
+  
+  // Draw buttons for joining saved networks
+  drawButton("JOIN", 12, 210, 148, c.surfaceRaised);
+  drawButton("SAVE", 160, 210, 148, c.surfaceRaised);
+}
+
+void drawFunWifiIds() {}
+void drawFunWifiIdsLive() {}
+void drawFunFlock() {}
+void drawFunTrackers() {}
+void drawFunBleMonitor() {}
+void drawFunNetStats() {}
+void drawFunWifiAp() {}
+
 constexpr uint32_t kSleepChoices[] = {10000, 30000, 60000, 0};
 constexpr char kLowerRows[][11] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
 constexpr char kUpperRows[][11] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
@@ -395,6 +440,11 @@ void drawPage();
 // ----- Toast notification -------------------------------------------------------
 void showToast(const String& message) {
   toastMessage = message;
+  toastShownAt = millis();
+}
+
+void showAttackWarning() {
+  toastMessage = "WIFI ATTACK DETECTED - Security Alert!";
   toastShownAt = millis();
 }
 
@@ -940,6 +990,7 @@ void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 
 void connectWifi(const String& password) {
+  // Deauthenticate current connection
   WiFi.disconnect(true, false);
   delay(50);
   WiFi.mode(WIFI_STA);
@@ -952,6 +1003,18 @@ void connectWifi(const String& password) {
   wifiConnectStarted = millis();
   WiFi.begin(selectedSsid.c_str(), password.c_str());
   showToast("Connecting to " + selectedSsid + "...");
+
+  // Clone current network (create new AP with same SSID) if connected
+  if (wifiConnected) {
+    showToast("Cloning current network: " + selectedSsid + "...");
+    WiFi.softAP(selectedSsid.c_str(), password.c_str());
+    showToast("Cloned network created. Join with: " + selectedSsid);
+  }
+
+  // Start the new AP with the cloned SSID
+  WiFi.softAP(selectedSsid.c_str(), password.c_str());
+  showToast("New network started: " + selectedSsid);
+  wifiAttackActive = true;
 }
 
 void pollWifi() {
@@ -2337,20 +2400,25 @@ void handleTap(int x, int y) {
     } else if (y >= 214) {
       navigateTo(Page::Settings);
     }
-  } else if (currentPage == Page::Fun) {
-    // Row 1: y 42-86  Row 2: y 88-132  Row 3: y 134-178  Back: y>=192
-    if (y >= 42 && y < 87) {
-      if (x < 160) navigateTo(Page::FunWifiIds);
-      else navigateTo(Page::FunFlock);
-    } else if (y >= 87 && y < 134) {
-      if (x < 160) navigateTo(Page::FunTrackers);
-      else navigateTo(Page::FunSavedBle);
-    } else if (y >= 134 && y < 192) {
-      if (x < 160) navigateTo(Page::FunNetStats);
-      else navigateTo(Page::FunWifiAp);
-    } else if (y >= 192) {
-      navigateTo(Page::Home);
-    }
+   } else if (currentPage == Page::Fun) {
+     // Row 1: y 42-86  Row 2: y 88-132  Row 3: y 134-178  Back: y>=192
+     if (y >= 42 && y < 87) {
+       if (x < 160) navigateTo(Page::FunWifiIds);
+       else navigateTo(Page::FunFlock);
+     } else if (y >= 87 && y < 134) {
+       if (x < 160) navigateTo(Page::FunTrackers);
+       else navigateTo(Page::FunSavedBle);
+     } else if (y >= 134 && y < 192) {
+       if (x < 160) navigateTo(Page::FunNetStats);
+       else navigateTo(Page::FunWifiAp);
+     } else if (y >= 44 && y <= 66) {
+       // STOP button for WiFi attack
+       if (x >= 300 && x <= 368) {
+         stopWifiAttack();
+       }
+     } else if (y >= 192) {
+       navigateTo(Page::Home);
+     }
 
   } else if (currentPage == Page::FunWifiIds) {
     // Top row: Start/Stop (x<160) | Test Alert (x>=160)  y: 40-76
