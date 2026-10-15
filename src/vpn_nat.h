@@ -11,6 +11,7 @@
 #include "lwip/udp.h"
 #include "lwip/etharp.h"
 #include "lwip/inet_chksum.h"
+#include "lwip/inet.h"
 #include "lwip/prot/ethernet.h"
 #include "lwip/prot/ip4.h"
 #include "lwip/prot/tcp.h"
@@ -485,27 +486,22 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
                     (((struct udp_hdr *)((u8_t *)p->payload + hlen))->dest == PP_HTONS(53));
 
   if (isToLocal && !isDnsQuery) {
-    // Deliver local traffic (DHCP server port 67, local web, etc.)
+    // Deliver local traffic (DHCP port 67, web server port 80, etc.) to LwIP
     pbuf_add_header(p, kEthHdrLen);
     return orig_ap_input ? orig_ap_input(p, inp) : ERR_OK;
   }
+  // DNS queries to 192.168.4.1 fall through: the hook rewrites dest to upstreamDns
+  // and routes them out just like any other UDP traffic — LwIP has no DNS server.
 
-  // Select outbound network interface:
-  // If WireGuard is active and connected, route through WireGuard tunnel!
-  // Otherwise, route through standard Wi-Fi Station interface!
-  // Select outbound network interface:
-  // If Direct mode, route through standard Wi-Fi Station interface!
-  // If VPN mode, route through WireGuard tunnel!
-  // KILL-SWITCH: If VPN mode but tunnel is not ready, DROP packet so client never leaks real IP!
+  // Select outbound network interface.
+  // VPN mode: prefer WireGuard tunnel; fall back to STA while tunnel is connecting
+  // so clients always have internet (DNS/HTTP work immediately, VPN kicks in once ready).
+  // Direct mode: always use STA.
   struct netif *out_netif = nullptr;
-  if (currentCountry == Country::Direct) {
-    out_netif = sta_netif;
-  } else if (wgActive && wg_netif && netif_is_link_up(wg_netif)) {
-    out_netif = wg_netif;
+  if (currentCountry != Country::Direct && wgActive && wg_netif && netif_is_link_up(wg_netif)) {
+    out_netif = wg_netif;   // Encrypted tunnel ready — use it
   } else {
-    // Drop packet until encrypted tunnel is established to avoid leaking client's real IP
-    pbuf_add_header(p, kEthHdrLen);
-    return orig_ap_input ? orig_ap_input(p, inp) : ERR_IF;
+    out_netif = sta_netif;  // Direct or tunnel not yet up — use home Wi-Fi
   }
 
   ip4_addr_t dstIp;
@@ -862,10 +858,10 @@ inline bool start(IPAddress dnsServer = IPAddress(1, 1, 1, 1), Country country =
   esp_netif_t *esp_ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
   if (esp_ap) {
     esp_netif_dhcps_stop(esp_ap);
-    // DNS = 192.168.4.1 (CYD intercepts and forwards to upstreamDns)
+    // DNS = 192.168.4.1 (CYD intercepts port 53 and forwards to upstreamDns)
     esp_netif_dns_info_t d;
     d.ip.type = ESP_IPADDR_TYPE_V4;
-    d.ip.u_addr.ip4.addr = PP_HTONL(LWIP_MAKEU32(192, 168, 4, 1));
+    d.ip.u_addr.ip4.addr = inet_addr("192.168.4.1");  // always correct byte order
     esp_netif_set_dns_info(esp_ap, ESP_NETIF_DNS_MAIN, &d);
     // Clear secondary DNS so clients don't bypass the CYD
     esp_netif_dns_info_t d2 = {};
