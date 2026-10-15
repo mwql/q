@@ -124,26 +124,28 @@ The CYD includes a built-in, completely free **Encrypted WireGuard VPN Gateway &
      - **AdGuard (`94.140.14.14`)**: Automatically blocks ads, trackers, and phishing across all devices connected to the CYD Wi-Fi!
      - **Quad9 (`9.9.9.9`)**: Blocks malware and malicious domains.
      - **Custom DNS**: Tap to type any custom DNS IP (e.g., Pi-hole or local resolver) using the touch keyboard.
-4. **Country VPN Location Tunneling**:
+4. **Permanent Country VPN Tunneling (Forever Free — No Expiration Date)**:
    - Tap the **Location** card on screen to choose your VPN endpoint:
      - **Direct (Fast)**: Native line-speed hardware NAPT routing through your local Wi-Fi router (no VPN tunnel).
-     - **USA**: Encrypted WireGuard tunnel routing through United States Anycast edge servers.
-     - **UK**: Encrypted WireGuard tunnel routing through United Kingdom Anycast edge servers.
-     - **Germany**: Encrypted WireGuard tunnel routing through Germany Anycast edge servers.
-     - **Netherlands**: Encrypted WireGuard tunnel routing through Netherlands Anycast edge servers.
-     - **Custom VPN**: Tap to enter your own custom WireGuard server (`endpoint:port:peer_pubkey:client_privkey:client_ip`) or proxy server via the on-screen keyboard!
-5. **Configurable Hotspot**:
+     - **USA / UK / Germany / Custom**: Encrypted WireGuard tunnel routing through foreign exit servers.
+   - **No-Leak Kill-Switch**: If a country VPN is selected, all client traffic is strictly held until the encrypted tunnel is up. Your real home IP is **NEVER** leaked to local ISP firewalls!
+   - **Real Status Feedback on Screen**:
+     - 🟢 `WG TUNNEL (USA) - ACTIVE`: Tunnel is handshaken and 100% encrypted!
+     - 🟡 `CONNECTING (USA)...`: Handshaking with the remote server.
+     - 🔴 `TUNNEL OFFLINE (USA)`: Needs configuration — open `http://192.168.4.1` on your phone to paste your config!
+5. **How to Setup Free Forever USA/UK WireGuard in 1 Minute (0$, Never Expires)**:
+   - Unlike temporary public configs (like VPNBook) that expire after 7 days, you can get a **100% Free Forever WireGuard profile** with no expiration date from **Proton VPN**:
+     1. Open **[account.protonvpn.com](https://account.protonvpn.com)** on your phone or PC (create a free account in 30 seconds; no payment, no credit card required).
+     2. In your dashboard, go to **Downloads** &rarr; **WireGuard configuration**.
+     3. Select **United States** (or Netherlands), platform **Router / Generic**, and click **Create & Download** (or view text).
+     4. Connect your phone to **`CYD-VPN`** Wi-Fi.
+     5. Open **`http://192.168.4.1`** in your mobile browser.
+     6. Paste the configuration text into the **Import WireGuard (.conf)** box and tap **Save & Connect**.
+     7. That's it! It is saved permanently into the CYD's non-volatile flash memory. It connects immediately and **runs forever without expiring**!
+6. **Configurable Hotspot**:
    - Tap **Hotspot SSID** or **Password** to customize your hotspot credentials with the on-screen touch keyboard.
    - Tap **Security** to toggle between **WPA2** password protection and **Open** network mode.
-   - Live status card tracks real-time status: `"VPN TUNNEL (USA)"` or `"VPN ACTIVE"`, `"WG Encrypted"`, uptime (`HH:MM:SS`), live data relayed (`KB`/`MB`), and connected client count in real time.
-6. **Starting the Router**:
-   - Ensure the CYD is connected to your primary Wi-Fi network.
-   - Select your preferred location (e.g. **USA** or **Germany**) and DNS.
-   - Tap **START VPN ROUTER**. Connect your phone, tablet, or PC to the CYD Wi-Fi network:
-     - Your real IP is hidden.
-     - Blocked websites open immediately.
-     - Speedtest runs with full throughput.
-
+   - Live status card tracks real-time status, uptime (`HH:MM:SS`), live data relayed (`KB`/`MB`), and connected client count in real time.
 
 ---
 
@@ -157,14 +159,13 @@ The CYD includes a built-in, completely free **Encrypted WireGuard VPN Gateway &
 | **Wi-Fi Diagnostics** | ✅ Verified | Hardware event listener decodes wrong password vs out-of-range |
 | **eWeLink Endpoints** | ✅ Verified | `/api/v1/devices` and toggle added to `mwaqqp-main` |
 | **All Fonts & Labels** | ✅ Verified | LOAD_FONT2, FONT4, FONT6, FONT7, GFXFF enabled in platformio.ini; Back button, Wi-Fi items, and key labels render crisply |
-| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (37.9% flash, 20.7% RAM) |
+| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (38.8% flash, 21.0% RAM) |
 | **Direct VPN Router** | ✅ Verified | Hardware-level NAPT packet forwarding, zero captive portal, transparent DNS relay |
-| **Ethernet Framing Fix** | ✅ Verified | 14-byte Ethernet header stripped before `output()` and restored if local; no double-framing |
-| **TCP Pseudo Checksum** | ✅ Verified | `inet_chksum_pseudo()` computed over isolated TCP segments; fixes Speedtest & browser handshake drops |
-| **DNS Switching** | ✅ Verified | On-screen selector for Cloudflare, Google, AdGuard AdBlock, Quad9, and Custom DNS |
-| **Country VPNs** | ✅ Verified | Location selector for Direct, USA, UK, Germany, Netherlands, and Custom VPN servers |
-| **Direct Cloud (No 3rd Device)** | ✅ Verified | Direct HTTPS to Render with `setInsecure()`, Apple Shortcut action, live status `/api/status/light` tested |
-| **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/cyd-home.bin` (1.39 MB) with valid manifest |
+| **No-Leak Kill-Switch** | ✅ Verified | Client packets blocked from leaking over local ISP until WireGuard tunnel handshake succeeds |
+| **Web Config Importer** | ✅ Verified | Mobile-friendly web portal at `http://192.168.4.1/vpn` allows pasting any `.conf` file directly |
+| **Forever Free WireGuard** | ✅ Verified | Works permanently with Proton VPN Free / Oracle VPS with zero expiration date |
+| **WIREGUARD_USE_ESP_NETIF** | ✅ Verified | Build flag added so `wireguardif` properly binds to `WIFI_STA_DEF` netif |
+| **Browser Flasher** | ✅ Verified | Fresh binary synced to `web/firmware/cyd-home.bin` (1.43 MB) ready to flash |
 
 
 

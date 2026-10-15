@@ -1596,8 +1596,136 @@ String vpnBytesStr() {
   }
 }
 
+void serveVpnWebPage() {
+  apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  String html = F(
+    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>CYD VPN Router</title>"
+    "<style>"
+    "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:20px;display:flex;flex-direction:column;align-items:center}"
+    ".wrap{max-width:440px;width:100%}"
+    ".head{text-align:center;margin-bottom:20px}"
+    ".head h1{color:#58a6ff;margin:0 0 4px;font-size:24px}"
+    ".card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;margin-bottom:16px}"
+    ".badge{display:inline-block;padding:4px 10px;border-radius:20px;font-weight:600;font-size:13px}"
+    ".bg-green{background:#238636;color:#fff}"
+    ".bg-yellow{background:#d29922;color:#000}"
+    ".bg-red{background:#da3633;color:#fff}"
+    ".btn{display:block;width:100%;box-sizing:border-box;background:#238636;color:#fff;font-weight:bold;font-size:15px;padding:12px;border:none;border-radius:8px;cursor:pointer;margin-top:10px}"
+    ".btn:hover{background:#2ea043}"
+    "textarea{width:100%;box-sizing:border-box;background:#0d1117;color:#7ee787;border:1px solid #30363d;border-radius:8px;padding:10px;font-family:monospace;font-size:12px;height:140px;resize:vertical}"
+    ".guide{font-size:13px;line-height:1.5;color:#8b949e}"
+    ".guide strong{color:#58a6ff}"
+    ".stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}"
+    ".stat-box{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px;text-align:center}"
+    ".stat-val{font-size:16px;font-weight:bold;color:#f0f6fc}"
+    ".stat-lbl{font-size:11px;color:#8b949e;text-transform:uppercase}"
+    "</style></head><body><div class='wrap'>"
+    "<div class='head'><h1>CYD VPN ROUTER</h1><p style='margin:0;color:#8b949e;font-size:13px'>Permanent, 100% Free Hardware VPN Tunnel</p></div>"
+    "<div class='card'>"
+    "<div style='display:flex;justify-content:space-between;align-items:center'><span style='font-weight:600'>Tunnel Status</span><span id='badge' class='badge'>Checking...</span></div>"
+    "<div class='stat-grid'>"
+    "<div class='stat-box'><div id='statUptime' class='stat-val'>--</div><div class='stat-lbl'>Uptime</div></div>"
+    "<div class='stat-box'><div id='statBytes' class='stat-val'>--</div><div class='stat-lbl'>Relayed</div></div>"
+    "<div class='stat-box'><div id='statClients' class='stat-val'>--</div><div class='stat-lbl'>Devices</div></div>"
+    "<div class='stat-box'><div id='statEndpoint' class='stat-val'>--</div><div class='stat-lbl'>Endpoint</div></div>"
+    "</div></div>"
+    "<div class='card'>"
+    "<h3 style='margin:0 0 8px;color:#58a6ff'>Import WireGuard (.conf)</h3>"
+    "<p class='guide' style='margin-bottom:10px'>Paste your WireGuard config text below. Saved permanently to CYD flash with <strong>NO expiration date</strong>!</p>"
+    "<textarea id='conf' placeholder='[Interface]&#10;PrivateKey = ...&#10;Address = 10.2.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = 185.156.x.x:51820'></textarea>"
+    "<button class='btn' onclick='saveConf()'>Save &amp; Connect WireGuard</button>"
+    "<div id='saveMsg' style='display:none;margin-top:10px;padding:8px;border-radius:6px;font-size:13px'></div>"
+    "</div>"
+    "<div class='card'>"
+    "<h3 style='margin:0 0 8px;color:#7ee787'>&#10004; How to Get Free Forever US/UK VPN:</h3>"
+    "<div class='guide'>"
+    "<p style='margin:4px 0'>1. Go to <strong>account.protonvpn.com</strong> (Free account, 0$, never expires).</p>"
+    "<p style='margin:4px 0'>2. Click <strong>Downloads &rarr; WireGuard configuration</strong>.</p>"
+    "<p style='margin:4px 0'>3. Select <strong>United States</strong> (or Netherlands), download or view text.</p>"
+    "<p style='margin:4px 0'>4. Copy and paste into the box above and tap <strong>Save &amp; Connect</strong>.</p>"
+    "<p style='margin:4px 0'>5. <strong>Done!</strong> CYD-VPN now permanently has US IP &amp; all blocked webs open!</p>"
+    "</div></div></div>"
+    "<script>"
+    "function refresh(){"
+    "fetch('/api/vpn/status').then(r=>r.json()).then(d=>{"
+    "var b=document.getElementById('badge');"
+    "if(d.state==='Connected'){b.className='badge bg-green';b.innerText='CONNECTED (USA)';}"
+    "else if(d.state==='Connecting...'){b.className='badge bg-yellow';b.innerText='CONNECTING...';}"
+    "else if(d.direct){b.className='badge bg-green';b.innerText='DIRECT WI-FI';}"
+    "else{b.className='badge bg-red';b.innerText='OFFLINE (PASTE CONFIG)';}"
+    "document.getElementById('statUptime').innerText=d.uptime;"
+    "document.getElementById('statBytes').innerText=d.bytes;"
+    "document.getElementById('statClients').innerText=d.clients;"
+    "document.getElementById('statEndpoint').innerText=d.endpoint||'None';"
+    "}).catch(()=>{});}"
+    "setInterval(refresh,2000);refresh();"
+    "function saveConf(){"
+    "var c=document.getElementById('conf').value;"
+    "var msg=document.getElementById('saveMsg');"
+    "if(!c.trim()){alert('Please paste a WireGuard config first!');return;}"
+    "msg.style.display='block';msg.style.background='#1f242c';msg.style.color='#58a6ff';msg.innerText='Saving to flash and connecting...';"
+    "fetch('/api/vpn/import',{method:'POST',headers:{'Content-Type':'text/plain'},body:c})"
+    ".then(r=>r.json()).then(res=>{"
+    "if(res.ok){"
+    "msg.style.background='#1a3a1a';msg.style.color='#7ee787';msg.innerText='Saved & Connecting! Tunnel starting...';"
+    "setTimeout(refresh,1000);"
+    "}else{"
+    "msg.style.background='#3a1a1a';msg.style.color='#f85149';msg.innerText='Error: '+res.error;"
+    "}}).catch(e=>{"
+    "msg.style.background='#3a1a1a';msg.style.color='#f85149';msg.innerText='Save failed: '+e;"
+    "});}"
+    "</script></body></html>"
+  );
+  apWeb.send(200, "text/html", html);
+}
+
+void handleVpnStatusApi() {
+  apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  VpnNat::WgTunnelConfig cfg = VpnNat::getActiveWgConfig();
+  bool isDirect = (vpnLocation == VpnLocation::Direct);
+  String st = isDirect ? "Direct" : (VpnNat::isTunnelConnected() ? "Connected" : (VpnNat::getTunnelState() == VpnNat::TunnelState::Connecting ? "Connecting..." : "Failed"));
+  String json = "{";
+  json += "\"running\":" + String(vpnRunning ? "true" : "false") + ",";
+  json += "\"direct\":" + String(isDirect ? "true" : "false") + ",";
+  json += "\"state\":\"" + st + "\",";
+  json += "\"uptime\":\"" + vpnUptimeStr() + "\",";
+  json += "\"bytes\":\"" + vpnBytesStr() + "\",";
+  json += "\"clients\":" + String(WiFi.softAPgetStationNum()) + ",";
+  json += "\"endpoint\":\"" + cfg.endpoint + (cfg.port ? (":" + String(cfg.port)) : "") + "\"";
+  json += "}";
+  apWeb.send(200, "application/json", json);
+}
+
+void handleVpnImportApi() {
+  apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  if (!apWeb.hasArg("plain")) {
+    apWeb.send(400, "application/json", "{\"ok\":false,\"error\":\"No config body received\"}");
+    return;
+  }
+  String body = apWeb.arg("plain");
+  VpnNat::WgTunnelConfig cfg;
+  if (!VpnNat::parseWireGuardConf(body, cfg)) {
+    apWeb.send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid WireGuard config. Check PrivateKey, PublicKey, Endpoint\"}");
+    return;
+  }
+  if (!VpnNat::saveWgConfig(cfg)) {
+    apWeb.send(500, "application/json", "{\"ok\":false,\"error\":\"Failed to save config to flash\"}");
+    return;
+  }
+  // Restart WireGuard with new config
+  VpnNat::stopWireGuard();
+  delay(100);
+  VpnNat::startWireGuard((VpnNat::Country)vpnLocation, vpnCustomServer);
+  showToast("WireGuard Config Saved!");
+  pageNeedsRedraw = true;
+  apWeb.send(200, "application/json", "{\"ok\":true,\"endpoint\":\"" + cfg.endpoint + "\"}");
+}
+
 void stopVpn() {
   if (!vpnRunning) return;
+  apWeb.stop();
   VpnNat::stop();
   WiFi.softAPdisconnect(true);
   delay(50);
@@ -1647,6 +1775,13 @@ bool startVpn() {
   IPAddress dns = getSelectedDnsIp();
   VpnNat::start(dns, (VpnNat::Country)vpnLocation, vpnCustomServer);
 
+  // Start Web Server on port 80 for easy configuration and status
+  apWeb.on("/", serveVpnWebPage);
+  apWeb.on("/vpn", serveVpnWebPage);
+  apWeb.on("/api/vpn/status", handleVpnStatusApi);
+  apWeb.on("/api/vpn/import", HTTP_POST, handleVpnImportApi);
+  apWeb.begin();
+
   vpnRunning = true;
   vpnStartTime = millis();
   vpnClientCount = 0;
@@ -1657,6 +1792,7 @@ bool startVpn() {
 void processVpn() {
   if (!vpnRunning) return;
   VpnNat::loop();
+  apWeb.handleClient();
   vpnBytesRelayed = VpnNat::getBytesRelayed();
 }
 
@@ -2036,11 +2172,24 @@ void drawVpn() {
   if (vpnRunning) {
     vpnClientCount = WiFi.softAPgetStationNum();
     String locStr = vpnLocationName(vpnLocation);
-    String statusTitle = VpnNat::isVpnEncrypted() ? "VPN TUNNEL (" + locStr + ")" : "VPN ACTIVE (" + locStr + ")";
-    String statusLine = (VpnNat::isVpnEncrypted() ? "WG Encrypted | " : "Direct | ") + vpnUptimeStr() + " | " + vpnBytesStr() + " | " + String(vpnClientCount) + " dev";
+    String statusTitle;
+    String statusLine;
+    if (vpnLocation == VpnLocation::Direct) {
+      statusTitle = "DIRECT ROUTER (Fast Wi-Fi)";
+      statusLine = "Direct | " + vpnUptimeStr() + " | " + vpnBytesStr() + " | " + String(vpnClientCount) + " dev";
+    } else if (VpnNat::isTunnelConnected()) {
+      statusTitle = "WG TUNNEL (" + locStr + ") - ACTIVE";
+      statusLine = "Encrypted | " + vpnUptimeStr() + " | " + vpnBytesStr() + " | " + String(vpnClientCount) + " dev";
+    } else if (VpnNat::getTunnelState() == VpnNat::TunnelState::Connecting) {
+      statusTitle = "CONNECTING (" + locStr + ")...";
+      statusLine = "Handshaking with server...";
+    } else {
+      statusTitle = "TUNNEL OFFLINE (" + locStr + ")";
+      statusLine = "Open 192.168.4.1 to configure";
+    }
     card(12, 42, 296, 38, statusTitle, statusLine, true);
   } else {
-    card(12, 42, 296, 38, "VPN Ready", "Tap START to begin VPN tunnel sharing");
+    card(12, 42, 296, 38, "VPN Ready", "Tap START to begin VPN router");
   }
 
   // Row 2: Hotspot SSID / Password (y=84, h=28)
@@ -2077,7 +2226,7 @@ void drawVpn() {
 
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
-  tft.drawRightString(vpnRunning ? (VpnNat::isVpnEncrypted() ? "WireGuard - IP Hidden" : "Direct Wi-Fi - No Portal") : "Tap card to change DNS/Location", 305, 224, 1);
+  tft.drawRightString(vpnRunning ? "Web Setup: 192.168.4.1" : "Tap card to change DNS/Location", 305, 224, 1);
 }
 
 void drawHome() {

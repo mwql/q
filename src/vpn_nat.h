@@ -18,6 +18,8 @@
 #include "lwip/prot/icmp.h"
 #include <WireGuard-ESP32.h>
 
+#include <Preferences.h>
+
 namespace VpnNat {
 
 enum class Country : uint8_t {
@@ -27,6 +29,24 @@ enum class Country : uint8_t {
   Germany,
   Netherlands,
   Custom
+};
+
+enum class TunnelState : uint8_t {
+  Disabled = 0,
+  Direct,
+  Connecting,
+  Connected,
+  Failed
+};
+
+struct WgTunnelConfig {
+  String privateKey;
+  String clientIp = "10.2.0.2";
+  String endpoint;
+  uint16_t port = 51820;
+  String peerPubKey;
+  String dns = "1.1.1.1";
+  bool valid = false;
 };
 
 struct NatEntry {
@@ -60,6 +80,11 @@ static bool natActive = false;
 static bool wgActive = false;
 static uint32_t natBytesRelayed = 0;
 
+static TunnelState tunnelState = TunnelState::Disabled;
+static uint32_t tunnelStartTime = 0;
+static String tunnelErrorMsg = "";
+static WgTunnelConfig activeWgConfig;
+
 static WireGuard wg;
 static WiFiUDP dnsUdp;
 static const uint16_t kDnsPort = 53;
@@ -68,6 +93,93 @@ static Country currentCountry = Country::Direct;
 
 // Forward declaration
 static err_t wg_input_hook(struct pbuf *p, struct netif *inp);
+
+// Parse standard WireGuard .conf file
+inline bool parseWireGuardConf(const String& rawText, WgTunnelConfig& cfg) {
+  cfg = WgTunnelConfig();
+  int start = 0;
+  while (start < rawText.length()) {
+    int end = rawText.indexOf('\n', start);
+    if (end < 0) end = rawText.length();
+    String line = rawText.substring(start, end);
+    line.trim();
+    start = end + 1;
+
+    if (line.startsWith("#") || line.startsWith(";")) continue;
+    int eq = line.indexOf('=');
+    if (eq <= 0) continue;
+
+    String k = line.substring(0, eq);
+    k.trim();
+    k.toLowerCase();
+    String v = line.substring(eq + 1);
+    v.trim();
+
+    if (k == "privatekey") {
+      cfg.privateKey = v;
+    } else if (k == "publickey") {
+      cfg.peerPubKey = v;
+    } else if (k == "address") {
+      int slash = v.indexOf('/');
+      if (slash > 0) cfg.clientIp = v.substring(0, slash);
+      else cfg.clientIp = v;
+      cfg.clientIp.trim();
+    } else if (k == "endpoint") {
+      int colon = v.lastIndexOf(':');
+      if (colon > 0) {
+        cfg.endpoint = v.substring(0, colon);
+        cfg.port = v.substring(colon + 1).toInt();
+      } else {
+        cfg.endpoint = v;
+        cfg.port = 51820;
+      }
+      cfg.endpoint.trim();
+    } else if (k == "dns") {
+      int comma = v.indexOf(',');
+      if (comma > 0) cfg.dns = v.substring(0, comma);
+      else cfg.dns = v;
+      cfg.dns.trim();
+    }
+  }
+
+  if (cfg.privateKey.length() >= 40 && cfg.peerPubKey.length() >= 40 && cfg.endpoint.length() >= 4) {
+    cfg.valid = true;
+    return true;
+  }
+  return false;
+}
+
+inline void loadSavedWgConfig(WgTunnelConfig& cfg) {
+  Preferences pref;
+  pref.begin("cydhub2", true);
+  cfg.valid = pref.getBool("wg_valid", false);
+  if (cfg.valid) {
+    cfg.privateKey = pref.getString("wg_priv", "");
+    cfg.peerPubKey = pref.getString("wg_pub", "");
+    cfg.endpoint = pref.getString("wg_end", "");
+    cfg.port = pref.getUShort("wg_port", 51820);
+    cfg.clientIp = pref.getString("wg_ip", "10.2.0.2");
+    cfg.dns = pref.getString("wg_dns", "1.1.1.1");
+  }
+  pref.end();
+}
+
+inline bool saveWgConfig(const WgTunnelConfig& cfg) {
+  if (cfg.privateKey.length() < 30 || cfg.peerPubKey.length() < 30 || cfg.endpoint.length() < 3) {
+    return false;
+  }
+  Preferences pref;
+  pref.begin("cydhub2", false);
+  pref.putString("wg_priv", cfg.privateKey);
+  pref.putString("wg_pub", cfg.peerPubKey);
+  pref.putString("wg_end", cfg.endpoint);
+  pref.putUShort("wg_port", cfg.port);
+  pref.putString("wg_ip", cfg.clientIp);
+  pref.putString("wg_dns", cfg.dns);
+  pref.putBool("wg_valid", true);
+  pref.end();
+  return true;
+}
 
 // Find netif pointers in LwIP list
 inline void findNetifs() {
@@ -87,61 +199,37 @@ inline void findNetifs() {
 
 // Start WireGuard encrypted tunnel
 inline bool startWireGuard(Country c, const String& customHostPort = "") {
-  String endpoint = "162.159.192.1";
-  uint16_t port = 2408;
-  String peerPubKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=";
-  String clientPrivKey = "OKfiD0XxTeEZYI0l8bk9y63UVi2jbIp1eyOOsyF7LEk=";
-  IPAddress clientIp(172, 16, 0, 2);
+  loadSavedWgConfig(activeWgConfig);
 
-  switch (c) {
-    case Country::USA:
-      endpoint = "162.159.192.2";
-      upstreamDns = IPAddress(1, 1, 1, 1);
-      break;
-    case Country::UK:
-      endpoint = "162.159.192.3";
-      upstreamDns = IPAddress(1, 1, 1, 1);
-      break;
-    case Country::Germany:
-      endpoint = "162.159.192.4";
-      upstreamDns = IPAddress(1, 1, 1, 1);
-      break;
-    case Country::Netherlands:
-      endpoint = "162.159.192.5";
-      upstreamDns = IPAddress(1, 1, 1, 1);
-      break;
-    case Country::Custom: {
-      if (customHostPort.length()) {
-        int c1 = customHostPort.indexOf(':');
-        if (c1 > 0) {
-          endpoint = customHostPort.substring(0, c1);
-          int c2 = customHostPort.indexOf(':', c1 + 1);
-          if (c2 > 0) {
-            port = customHostPort.substring(c1 + 1, c2).toInt();
-            int c3 = customHostPort.indexOf(':', c2 + 1);
-            if (c3 > 0) {
-              peerPubKey = customHostPort.substring(c2 + 1, c3);
-              int c4 = customHostPort.indexOf(':', c3 + 1);
-              if (c4 > 0) {
-                clientPrivKey = customHostPort.substring(c3 + 1, c4);
-                clientIp.fromString(customHostPort.substring(c4 + 1));
-              } else {
-                clientPrivKey = customHostPort.substring(c3 + 1);
-              }
-            } else {
-              peerPubKey = customHostPort.substring(c2 + 1);
-            }
+  // If custom server parameter was passed in host:port:pubkey:privkey:ip format
+  if (c == Country::Custom && customHostPort.length() > 20) {
+    int c1 = customHostPort.indexOf(':');
+    if (c1 > 0) {
+      activeWgConfig.endpoint = customHostPort.substring(0, c1);
+      int c2 = customHostPort.indexOf(':', c1 + 1);
+      if (c2 > 0) {
+        activeWgConfig.port = customHostPort.substring(c1 + 1, c2).toInt();
+        int c3 = customHostPort.indexOf(':', c2 + 1);
+        if (c3 > 0) {
+          activeWgConfig.peerPubKey = customHostPort.substring(c2 + 1, c3);
+          int c4 = customHostPort.indexOf(':', c3 + 1);
+          if (c4 > 0) {
+            activeWgConfig.privateKey = customHostPort.substring(c3 + 1, c4);
+            activeWgConfig.clientIp = customHostPort.substring(c4 + 1);
           } else {
-            port = customHostPort.substring(c1 + 1).toInt();
+            activeWgConfig.privateKey = customHostPort.substring(c3 + 1);
           }
-        } else {
-          endpoint = customHostPort;
+          activeWgConfig.valid = true;
+          saveWgConfig(activeWgConfig);
         }
       }
-      break;
     }
-    default:
-      return false;
+  }
+
+  if (!activeWgConfig.valid) {
+    tunnelState = TunnelState::Failed;
+    tunnelErrorMsg = "No config (open 192.168.4.1)";
+    return false;
   }
 
   // Ensure system timestamp is modern so WireGuard handshake passes validation
@@ -151,9 +239,24 @@ inline bool startWireGuard(Country c, const String& customHostPort = "") {
     settimeofday(&tv, NULL);
   }
 
+  if (activeWgConfig.dns.length()) {
+    upstreamDns.fromString(activeWgConfig.dns);
+  }
+
+  IPAddress clientIp;
+  if (!clientIp.fromString(activeWgConfig.clientIp)) {
+    clientIp = IPAddress(10, 2, 0, 2);
+  }
+
   wg.setDefaultRoute(true);
-  bool ok = wg.begin(clientIp, clientPrivKey.c_str(), endpoint.c_str(), peerPubKey.c_str(), port);
+  tunnelState = TunnelState::Connecting;
+  tunnelStartTime = millis();
+  tunnelErrorMsg = "";
+
+  bool ok = wg.begin(clientIp, activeWgConfig.privateKey.c_str(), activeWgConfig.endpoint.c_str(), activeWgConfig.peerPubKey.c_str(), activeWgConfig.port);
   if (!ok) {
+    tunnelState = TunnelState::Failed;
+    tunnelErrorMsg = "WireGuard begin failed";
     return false;
   }
 
@@ -165,11 +268,19 @@ inline bool startWireGuard(Country c, const String& customHostPort = "") {
 
     // Allow handshake packet to complete round-trip
     uint32_t tWait = millis();
-    while (!netif_is_link_up(wg_netif) && millis() - tWait < 2000) {
+    while (!netif_is_link_up(wg_netif) && millis() - tWait < 2500) {
       delay(50);
+    }
+    if (netif_is_link_up(wg_netif)) {
+      tunnelState = TunnelState::Connected;
+    } else {
+      tunnelState = TunnelState::Connecting;
     }
     return true;
   }
+
+  tunnelState = TunnelState::Failed;
+  tunnelErrorMsg = "Interface not found";
   return false;
 }
 
@@ -182,6 +293,8 @@ inline void stopWireGuard() {
     wg_netif = nullptr;
     wgActive = false;
   }
+  tunnelState = TunnelState::Disabled;
+  tunnelErrorMsg = "";
 }
 
 // Look up or allocate a NAT entry for an outbound packet
@@ -294,10 +407,17 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
   // Select outbound network interface:
   // If WireGuard is active and connected, route through WireGuard tunnel!
   // Otherwise, route through standard Wi-Fi Station interface!
-  struct netif *out_netif = (wgActive && wg_netif && netif_is_link_up(wg_netif)) ? wg_netif : sta_netif;
-  bool isTunneled = (out_netif == wg_netif);
-
-  if (!out_netif || !netif_is_up(out_netif)) {
+  // Select outbound network interface:
+  // If Direct mode, route through standard Wi-Fi Station interface!
+  // If VPN mode, route through WireGuard tunnel!
+  // KILL-SWITCH: If VPN mode but tunnel is not ready, DROP packet so client never leaks real IP!
+  struct netif *out_netif = nullptr;
+  if (currentCountry == Country::Direct) {
+    out_netif = sta_netif;
+  } else if (wgActive && wg_netif && netif_is_link_up(wg_netif)) {
+    out_netif = wg_netif;
+  } else {
+    // Drop packet until encrypted tunnel is established to avoid leaking client's real IP
     pbuf_add_header(p, kEthHdrLen);
     return orig_ap_input ? orig_ap_input(p, inp) : ERR_IF;
   }
@@ -735,6 +855,18 @@ inline void loop() {
     }
   }
 
+  // Periodic tunnel status monitor
+  static uint32_t lastTunnelCheck = 0;
+  if (wgActive && millis() - lastTunnelCheck > 1000) {
+    lastTunnelCheck = millis();
+    if (wg_netif && netif_is_link_up(wg_netif)) {
+      tunnelState = TunnelState::Connected;
+    } else if (tunnelState == TunnelState::Connecting && millis() - tunnelStartTime > 15000) {
+      tunnelState = TunnelState::Failed;
+      tunnelErrorMsg = "Handshake timeout";
+    }
+  }
+
   // Periodic NAT table sweep to clean up dead sessions
   static uint32_t lastSweep = 0;
   if (millis() - lastSweep > 5000) {
@@ -759,6 +891,29 @@ inline bool isActive() {
 
 inline bool isVpnEncrypted() {
   return wgActive && wg_netif && netif_is_link_up(wg_netif);
+}
+
+inline bool isTunnelConnected() {
+  return tunnelState == TunnelState::Connected;
+}
+
+inline TunnelState getTunnelState() {
+  return tunnelState;
+}
+
+inline String getTunnelStateStr() {
+  switch (tunnelState) {
+    case TunnelState::Connected:  return "Connected (Encrypted)";
+    case TunnelState::Connecting: return "Connecting...";
+    case TunnelState::Failed:     return "Offline (Needs Config)";
+    case TunnelState::Direct:     return "Direct Wi-Fi";
+    case TunnelState::Disabled:   return "Disabled";
+    default:                      return "Unknown";
+  }
+}
+
+inline const WgTunnelConfig& getActiveWgConfig() {
+  return activeWgConfig;
 }
 
 inline uint32_t getBytesRelayed() {
