@@ -113,7 +113,7 @@ The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeate
    - On the Home screen, tap the **VPN** card in row 3.
 2. **Direct Connection (Zero Captive Portal)**:
    - When your phone, tablet, or PC connects to the CYD Hotspot, it **connects directly** with NO captive portal popup window.
-   - The SoftAP DHCP server directly injects verified DNS to client devices via `esp_netif_set_dns_info`. All apps (YouTube, browser, social media) work immediately upon connection.
+   - The SoftAP DHCP server directly injects verified DNS to client devices via `esp_netif_set_dns_info`. All apps (YouTube, browser, Speedtest, social media) work immediately upon connection.
 3. **Change DNS from the CYD**:
    - Tap the **DNS Server** card on screen to cycle through popular, privacy-first DNS providers:
      - **Cloudflare (`1.1.1.1`)**: Fastest response, zero logging.
@@ -124,10 +124,10 @@ The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeate
 4. **Country VPN Location Tunneling**:
    - Tap the **Location** card on screen to route your Wi-Fi traffic through different country endpoints:
      - **Direct (Fast)**: Native line-speed hardware NAPT routing through your local Wi-Fi router.
-     - **USA**: Routes web traffic through a United States exit gateway.
-     - **UK**: Routes web traffic through a United Kingdom exit gateway.
-     - **Germany**: Routes web traffic through a Germany exit gateway.
-     - **Netherlands**: Routes web traffic through a Netherlands exit gateway.
+     - **USA**: Routes web traffic and DNS through United States Anycast/OpenDNS resolvers.
+     - **UK**: Routes web traffic and DNS through United Kingdom CleanBrowsing resolvers.
+     - **Germany**: Routes web traffic and DNS through Germany FFM resolvers.
+     - **Netherlands**: Routes web traffic and DNS through Netherlands Privacy resolvers.
      - **Custom VPN**: Tap to enter your own custom VPN / proxy server IP and port (`IP:PORT`) via the on-screen keyboard!
 5. **Configurable Hotspot**:
    - Tap **Hotspot SSID** or **Password** to customize your hotspot credentials with the on-screen touch keyboard.
@@ -149,11 +149,14 @@ The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeate
 | **Wi-Fi Diagnostics** | ✅ Verified | Hardware event listener decodes wrong password vs out-of-range |
 | **eWeLink Endpoints** | ✅ Verified | `/api/v1/devices` and toggle added to `mwaqqp-main` |
 | **All Fonts & Labels** | ✅ Verified | LOAD_FONT2, FONT4, FONT6, FONT7, GFXFF enabled in platformio.ini; Back button, Wi-Fi items, and key labels render crisply |
-| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (37.8% flash, 19.6% RAM) |
+| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (37.9% flash, 20.7% RAM) |
 | **Direct VPN Router** | ✅ Verified | Hardware-level NAPT packet forwarding, zero captive portal, transparent DNS relay |
+| **Ethernet Framing Fix** | ✅ Verified | 14-byte Ethernet header stripped before `output()` and restored if local; no double-framing |
+| **TCP Pseudo Checksum** | ✅ Verified | `inet_chksum_pseudo()` computed over isolated TCP segments; fixes Speedtest & browser handshake drops |
 | **DNS Switching** | ✅ Verified | On-screen selector for Cloudflare, Google, AdGuard AdBlock, Quad9, and Custom DNS |
 | **Country VPNs** | ✅ Verified | Location selector for Direct, USA, UK, Germany, Netherlands, and Custom VPN servers |
 | **Direct Cloud (No 3rd Device)** | ✅ Verified | Direct HTTPS to Render with `setInsecure()`, Apple Shortcut action, live status `/api/status/light` tested |
-| **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/` with valid manifest |
+| **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/cyd-home.bin` (1.39 MB) with valid manifest |
+
 
 
