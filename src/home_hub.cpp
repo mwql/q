@@ -2036,10 +2036,11 @@ void drawVpn() {
   if (vpnRunning) {
     vpnClientCount = WiFi.softAPgetStationNum();
     String locStr = vpnLocationName(vpnLocation);
-    String statusLine = locStr + " | " + vpnUptimeStr() + " | " + vpnBytesStr() + " | " + String(vpnClientCount) + " dev";
-    card(12, 42, 296, 38, "VPN ACTIVE", statusLine, true);
+    String statusTitle = VpnNat::isVpnEncrypted() ? "VPN TUNNEL (" + locStr + ")" : "VPN ACTIVE (" + locStr + ")";
+    String statusLine = (VpnNat::isVpnEncrypted() ? "WG Encrypted | " : "Direct | ") + vpnUptimeStr() + " | " + vpnBytesStr() + " | " + String(vpnClientCount) + " dev";
+    card(12, 42, 296, 38, statusTitle, statusLine, true);
   } else {
-    card(12, 42, 296, 38, "VPN Ready", "Tap START to begin direct VPN sharing");
+    card(12, 42, 296, 38, "VPN Ready", "Tap START to begin VPN tunnel sharing");
   }
 
   // Row 2: Hotspot SSID / Password (y=84, h=28)
@@ -2076,7 +2077,7 @@ void drawVpn() {
 
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
-  tft.drawRightString(vpnRunning ? "Direct Wi-Fi - No Portal" : "Tap card to change DNS/Location", 305, 224, 1);
+  tft.drawRightString(vpnRunning ? (VpnNat::isVpnEncrypted() ? "WireGuard - IP Hidden" : "Direct Wi-Fi - No Portal") : "Tap card to change DNS/Location", 305, 224, 1);
 }
 
 void drawHome() {

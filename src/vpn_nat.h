@@ -16,6 +16,7 @@
 #include "lwip/prot/tcp.h"
 #include "lwip/prot/udp.h"
 #include "lwip/prot/icmp.h"
+#include <WireGuard-ESP32.h>
 
 namespace VpnNat {
 
@@ -49,69 +50,137 @@ static portMUX_TYPE natMux = portMUX_INITIALIZER_UNLOCKED;
 
 static struct netif *ap_netif = nullptr;
 static struct netif *sta_netif = nullptr;
+static struct netif *wg_netif = nullptr;
+
 static netif_input_fn orig_ap_input = nullptr;
 static netif_input_fn orig_sta_input = nullptr;
+static netif_input_fn orig_wg_input = nullptr;
 
 static bool natActive = false;
+static bool wgActive = false;
 static uint32_t natBytesRelayed = 0;
 
+static WireGuard wg;
 static WiFiUDP dnsUdp;
 static const uint16_t kDnsPort = 53;
 static IPAddress upstreamDns(1, 1, 1, 1);
-
 static Country currentCountry = Country::Direct;
-static IPAddress countryGatewayIp(0, 0, 0, 0);
-static uint16_t countryGatewayPort = 0;
 
-// Preset Exit Gateways / Regional DNS for Country VPN mode
-inline void setCountryGateway(Country c, const String& customHostPort = "") {
-  currentCountry = c;
-  countryGatewayIp = IPAddress(0, 0, 0, 0);
-  countryGatewayPort = 0;
-
-  switch (c) {
-    case Country::Direct:
-      break;
-    case Country::USA:
-      // USA Anycast / OpenDNS
-      upstreamDns = IPAddress(208, 67, 222, 222);
-      break;
-    case Country::UK:
-      // UK CleanBrowsing / Anycast DNS
-      upstreamDns = IPAddress(185, 228, 168, 168);
-      break;
-    case Country::Germany:
-      // Germany FFM DNS
-      upstreamDns = IPAddress(91, 239, 100, 100);
-      break;
-    case Country::Netherlands:
-      // Netherlands Privacy DNS
-      upstreamDns = IPAddress(84, 200, 69, 80);
-      break;
-    case Country::Custom: {
-      if (customHostPort.length()) {
-        int colon = customHostPort.indexOf(':');
-        String h = (colon > 0) ? customHostPort.substring(0, colon) : customHostPort;
-        countryGatewayPort = (colon > 0) ? customHostPort.substring(colon + 1).toInt() : 8080;
-        if (!countryGatewayIp.fromString(h)) {
-          WiFi.hostByName(h.c_str(), countryGatewayIp);
-        }
-      }
-      break;
-    }
-  }
-}
+// Forward declaration
+static err_t wg_input_hook(struct pbuf *p, struct netif *inp);
 
 // Find netif pointers in LwIP list
 inline void findNetifs() {
   ap_netif = nullptr;
   sta_netif = nullptr;
+  wg_netif = nullptr;
   for (struct netif *n = netif_list; n != nullptr; n = n->next) {
     if (n->name[0] == 'a' && n->name[1] == 'p') {
       ap_netif = n;
     } else if (n->name[0] == 's' && n->name[1] == 't') {
       sta_netif = n;
+    } else if (n->name[0] == 'w' && n->name[1] == 'g') {
+      wg_netif = n;
     }
+  }
+}
+
+// Start WireGuard encrypted tunnel
+inline bool startWireGuard(Country c, const String& customHostPort = "") {
+  String endpoint = "162.159.192.1";
+  uint16_t port = 2408;
+  String peerPubKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=";
+  String clientPrivKey = "OKfiD0XxTeEZYI0l8bk9y63UVi2jbIp1eyOOsyF7LEk=";
+  IPAddress clientIp(172, 16, 0, 2);
+
+  switch (c) {
+    case Country::USA:
+      endpoint = "162.159.192.2";
+      upstreamDns = IPAddress(1, 1, 1, 1);
+      break;
+    case Country::UK:
+      endpoint = "162.159.192.3";
+      upstreamDns = IPAddress(1, 1, 1, 1);
+      break;
+    case Country::Germany:
+      endpoint = "162.159.192.4";
+      upstreamDns = IPAddress(1, 1, 1, 1);
+      break;
+    case Country::Netherlands:
+      endpoint = "162.159.192.5";
+      upstreamDns = IPAddress(1, 1, 1, 1);
+      break;
+    case Country::Custom: {
+      if (customHostPort.length()) {
+        int c1 = customHostPort.indexOf(':');
+        if (c1 > 0) {
+          endpoint = customHostPort.substring(0, c1);
+          int c2 = customHostPort.indexOf(':', c1 + 1);
+          if (c2 > 0) {
+            port = customHostPort.substring(c1 + 1, c2).toInt();
+            int c3 = customHostPort.indexOf(':', c2 + 1);
+            if (c3 > 0) {
+              peerPubKey = customHostPort.substring(c2 + 1, c3);
+              int c4 = customHostPort.indexOf(':', c3 + 1);
+              if (c4 > 0) {
+                clientPrivKey = customHostPort.substring(c3 + 1, c4);
+                clientIp.fromString(customHostPort.substring(c4 + 1));
+              } else {
+                clientPrivKey = customHostPort.substring(c3 + 1);
+              }
+            } else {
+              peerPubKey = customHostPort.substring(c2 + 1);
+            }
+          } else {
+            port = customHostPort.substring(c1 + 1).toInt();
+          }
+        } else {
+          endpoint = customHostPort;
+        }
+      }
+      break;
+    }
+    default:
+      return false;
+  }
+
+  // Ensure system timestamp is modern so WireGuard handshake passes validation
+  time_t nowSec = time(nullptr);
+  if (nowSec < 1600000000) {
+    struct timeval tv = { .tv_sec = 1760544000, .tv_usec = 0 }; // 2026 baseline
+    settimeofday(&tv, NULL);
+  }
+
+  wg.setDefaultRoute(true);
+  bool ok = wg.begin(clientIp, clientPrivKey.c_str(), endpoint.c_str(), peerPubKey.c_str(), port);
+  if (!ok) {
+    return false;
+  }
+
+  findNetifs();
+  if (wg_netif) {
+    orig_wg_input = wg_netif->input;
+    wg_netif->input = wg_input_hook;
+    wgActive = true;
+
+    // Allow handshake packet to complete round-trip
+    uint32_t tWait = millis();
+    while (!netif_is_link_up(wg_netif) && millis() - tWait < 2000) {
+      delay(50);
+    }
+    return true;
+  }
+  return false;
+}
+
+inline void stopWireGuard() {
+  if (wgActive) {
+    if (wg_netif && orig_wg_input) {
+      wg_netif->input = orig_wg_input;
+    }
+    wg.end();
+    wg_netif = nullptr;
+    wgActive = false;
   }
 }
 
@@ -178,7 +247,7 @@ inline NatEntry* getInboundNat(u16_t mapped_port, u8_t proto) {
 
 // Hook on AP netif: catches packets from connected client phone/laptop
 static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
-  if (!natActive || !sta_netif || !netif_is_up(sta_netif) || ip4_addr_isany_val(*netif_ip4_addr(sta_netif))) {
+  if (!natActive) {
     return orig_ap_input ? orig_ap_input(p, inp) : ERR_IF;
   }
 
@@ -189,11 +258,11 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
 
   struct eth_hdr *eth = (struct eth_hdr *)p->payload;
   if (eth->type != PP_HTONS(ETHTYPE_IP)) {
-    // ARP (0x0806), IPv6 (0x86DD), etc. -> let LwIP handle normally
+    // Pass ARP, IPv6 to LwIP
     return orig_ap_input ? orig_ap_input(p, inp) : ERR_VAL;
   }
 
-  // Strip the 14-byte Ethernet header so payload points directly to IPv4 header
+  // Strip 14-byte Ethernet header
   if (pbuf_remove_header(p, kEthHdrLen) != 0) {
     return orig_ap_input ? orig_ap_input(p, inp) : ERR_VAL;
   }
@@ -213,20 +282,30 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
                    ip4_addr_ismulticast(&iphdr->dest) ||
                    (iphdr->dest.addr == 0xFFFFFFFF);
 
-  // Check for DNS query (UDP port 53)
   bool isDnsQuery = (proto == IP_PROTO_UDP) && (p->len >= hlen + sizeof(struct udp_hdr)) &&
                     (((struct udp_hdr *)((u8_t *)p->payload + hlen))->dest == PP_HTONS(53));
 
   if (isToLocal && !isDnsQuery) {
-    // Local traffic (DHCP server port 67, local web, etc.): deliver to CYD stack
+    // Deliver local traffic (DHCP server port 67, local web, etc.)
     pbuf_add_header(p, kEthHdrLen);
     return orig_ap_input ? orig_ap_input(p, inp) : ERR_OK;
   }
 
+  // Select outbound network interface:
+  // If WireGuard is active and connected, route through WireGuard tunnel!
+  // Otherwise, route through standard Wi-Fi Station interface!
+  struct netif *out_netif = (wgActive && wg_netif && netif_is_link_up(wg_netif)) ? wg_netif : sta_netif;
+  bool isTunneled = (out_netif == wg_netif);
+
+  if (!out_netif || !netif_is_up(out_netif)) {
+    pbuf_add_header(p, kEthHdrLen);
+    return orig_ap_input ? orig_ap_input(p, inp) : ERR_IF;
+  }
+
   ip4_addr_t dstIp;
   dstIp.addr = iphdr->dest.addr;
+  const ip4_addr_t *src_ip = netif_ip4_addr(out_netif);
 
-  // Outbound Internet Packet NAT
   if (proto == IP_PROTO_TCP) {
     if (p->len >= hlen + sizeof(struct tcp_hdr)) {
       struct tcp_hdr *tcphdr = (struct tcp_hdr *)((u8_t *)p->payload + hlen);
@@ -236,8 +315,7 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
 
       NatEntry *e = getOutboundNat(&srcIp, srcPort, IP_PROTO_TCP, &dstIp);
       if (e) {
-        // Rewrite source IP to CYD STA IP
-        iphdr->src.addr = netif_ip4_addr(sta_netif)->addr;
+        iphdr->src.addr = src_ip->addr;
         tcphdr->src = htons(e->mapped_port);
 
         if (TCPH_FLAGS(tcphdr) & (TCP_FIN | TCP_RST)) {
@@ -248,17 +326,14 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
         iphdr->_chksum = inet_chksum(iphdr, hlen);
 
         u16_t tcp_len = p->tot_len - hlen;
-
-        // Calculate TCP pseudo-header checksum over TCP segment
         tcphdr->chksum = 0;
         pbuf_remove_header(p, hlen);
-        tcphdr->chksum = inet_chksum_pseudo(p, IP_PROTO_TCP, tcp_len, netif_ip4_addr(sta_netif), &dstIp);
+        tcphdr->chksum = inet_chksum_pseudo(p, IP_PROTO_TCP, tcp_len, src_ip, &dstIp);
         pbuf_add_header(p, hlen);
 
         natBytesRelayed += p->tot_len;
 
-        // etharp_output will prepend STA Ethernet header and transmit over Wi-Fi
-        sta_netif->output(sta_netif, p, &dstIp);
+        out_netif->output(out_netif, p, &dstIp);
         pbuf_free(p);
         return ERR_OK;
       }
@@ -270,7 +345,7 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
       ip4_addr_t srcIp;
       srcIp.addr = iphdr->src.addr;
 
-      // Transparent DNS redirection: redirect queries to selected upstream DNS server
+      // Transparent DNS redirection: redirect to upstream DNS through tunnel
       if (udphdr->dest == PP_HTONS(53)) {
         iphdr->dest.addr = (uint32_t)upstreamDns;
         dstIp.addr = (uint32_t)upstreamDns;
@@ -278,16 +353,16 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
 
       NatEntry *e = getOutboundNat(&srcIp, srcPort, IP_PROTO_UDP, &dstIp);
       if (e) {
-        iphdr->src.addr = netif_ip4_addr(sta_netif)->addr;
+        iphdr->src.addr = src_ip->addr;
         udphdr->src = htons(e->mapped_port);
 
         IPH_CHKSUM_SET(iphdr, 0);
         iphdr->_chksum = inet_chksum(iphdr, hlen);
-        udphdr->chksum = 0; // IPv4 UDP checksum optional
+        udphdr->chksum = 0;
 
         natBytesRelayed += p->tot_len;
 
-        sta_netif->output(sta_netif, p, &dstIp);
+        out_netif->output(out_netif, p, &dstIp);
         pbuf_free(p);
         return ERR_OK;
       }
@@ -295,14 +370,14 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
   } else if (proto == IP_PROTO_ICMP) {
     if (p->len >= hlen + 8) {
       struct icmp_echo_hdr *icmphdr = (struct icmp_echo_hdr *)((u8_t *)p->payload + hlen);
-      if (icmphdr->type == 8) { // Echo request
+      if (icmphdr->type == 8) {
         u16_t id = ntohs(icmphdr->id);
         ip4_addr_t srcIp;
         srcIp.addr = iphdr->src.addr;
 
         NatEntry *e = getOutboundNat(&srcIp, id, IP_PROTO_ICMP, &dstIp);
         if (e) {
-          iphdr->src.addr = netif_ip4_addr(sta_netif)->addr;
+          iphdr->src.addr = src_ip->addr;
           icmphdr->id = htons(e->mapped_port);
 
           u16_t icmp_len = p->tot_len - hlen;
@@ -316,7 +391,7 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
 
           natBytesRelayed += p->tot_len;
 
-          sta_netif->output(sta_netif, p, &dstIp);
+          out_netif->output(out_netif, p, &dstIp);
           pbuf_free(p);
           return ERR_OK;
         }
@@ -324,12 +399,11 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
     }
   }
 
-  // Restore Ethernet header if not forwarded
   pbuf_add_header(p, kEthHdrLen);
   return orig_ap_input ? orig_ap_input(p, inp) : ERR_OK;
 }
 
-// Hook on STA netif: catches replies from the Internet and forwards back to client phone
+// Hook on STA netif: catches direct replies from home router (when not tunneled)
 static err_t sta_input_hook(struct pbuf *p, struct netif *inp) {
   if (!natActive || !ap_netif || !netif_is_up(ap_netif)) {
     return orig_sta_input ? orig_sta_input(p, inp) : ERR_IF;
@@ -399,7 +473,6 @@ static err_t sta_input_hook(struct pbuf *p, struct netif *inp) {
         iphdr->dest.addr = e->client_ip.addr;
         udphdr->dest = htons(e->client_port);
 
-        // If client originally queried 192.168.4.1 for DNS, restore 192.168.4.1 as the source IP
         if (e->original_dest_ip.addr != 0) {
           iphdr->src.addr = e->original_dest_ip.addr;
         }
@@ -420,7 +493,7 @@ static err_t sta_input_hook(struct pbuf *p, struct netif *inp) {
   } else if (proto == IP_PROTO_ICMP) {
     if (p->len >= hlen + 8) {
       struct icmp_echo_hdr *icmphdr = (struct icmp_echo_hdr *)((u8_t *)p->payload + hlen);
-      if (icmphdr->type == 0) { // Echo reply
+      if (icmphdr->type == 0) {
         u16_t id = ntohs(icmphdr->id);
         NatEntry *e = getInboundNat(id, IP_PROTO_ICMP);
         if (e) {
@@ -448,9 +521,121 @@ static err_t sta_input_hook(struct pbuf *p, struct netif *inp) {
     }
   }
 
-  // Not our NAT packet - let CYD STA handle it
+  // Not client NAT traffic -> let local CYD stack (including WireGuard UDP socket) handle it
   pbuf_add_header(p, kEthHdrLen);
   return orig_sta_input ? orig_sta_input(p, inp) : ERR_OK;
+}
+
+// Hook on WireGuard netif: catches decrypted inbound packets from the VPN tunnel
+static err_t wg_input_hook(struct pbuf *p, struct netif *inp) {
+  if (!natActive || !ap_netif || !netif_is_up(ap_netif)) {
+    return orig_wg_input ? orig_wg_input(p, inp) : ERR_IF;
+  }
+
+  if (p->len < sizeof(struct ip_hdr)) {
+    return orig_wg_input ? orig_wg_input(p, inp) : ERR_VAL;
+  }
+
+  struct ip_hdr *iphdr = (struct ip_hdr *)p->payload;
+  if (IPH_V(iphdr) != 4) {
+    return orig_wg_input ? orig_wg_input(p, inp) : ERR_VAL;
+  }
+
+  u16_t hlen = IPH_HL(iphdr) * 4;
+  u8_t proto = IPH_PROTO(iphdr);
+
+  if (proto == IP_PROTO_TCP) {
+    if (p->len >= hlen + sizeof(struct tcp_hdr)) {
+      struct tcp_hdr *tcphdr = (struct tcp_hdr *)((u8_t *)p->payload + hlen);
+      u16_t destPort = ntohs(tcphdr->dest);
+      NatEntry *e = getInboundNat(destPort, IP_PROTO_TCP);
+      if (e) {
+        iphdr->dest.addr = e->client_ip.addr;
+        tcphdr->dest = htons(e->client_port);
+
+        if (TCPH_FLAGS(tcphdr) & (TCP_FIN | TCP_RST)) {
+          e->last_seen = millis() - (120000 - 10000);
+        }
+
+        IPH_CHKSUM_SET(iphdr, 0);
+        iphdr->_chksum = inet_chksum(iphdr, hlen);
+
+        ip4_addr_t srcIp, dstIp;
+        srcIp.addr = iphdr->src.addr;
+        dstIp.addr = iphdr->dest.addr;
+
+        u16_t tcp_len = p->tot_len - hlen;
+        tcphdr->chksum = 0;
+        pbuf_remove_header(p, hlen);
+        tcphdr->chksum = inet_chksum_pseudo(p, IP_PROTO_TCP, tcp_len, &srcIp, &dstIp);
+        pbuf_add_header(p, hlen);
+
+        natBytesRelayed += p->tot_len;
+
+        // Deliver decrypted packet to client phone
+        ap_netif->output(ap_netif, p, &dstIp);
+        pbuf_free(p);
+        return ERR_OK;
+      }
+    }
+  } else if (proto == IP_PROTO_UDP) {
+    if (p->len >= hlen + sizeof(struct udp_hdr)) {
+      struct udp_hdr *udphdr = (struct udp_hdr *)((u8_t *)p->payload + hlen);
+      u16_t destPort = ntohs(udphdr->dest);
+      NatEntry *e = getInboundNat(destPort, IP_PROTO_UDP);
+      if (e) {
+        iphdr->dest.addr = e->client_ip.addr;
+        udphdr->dest = htons(e->client_port);
+
+        if (e->original_dest_ip.addr != 0) {
+          iphdr->src.addr = e->original_dest_ip.addr;
+        }
+
+        IPH_CHKSUM_SET(iphdr, 0);
+        iphdr->_chksum = inet_chksum(iphdr, hlen);
+        udphdr->chksum = 0;
+
+        natBytesRelayed += p->tot_len;
+
+        ip4_addr_t dstIp;
+        dstIp.addr = e->client_ip.addr;
+        ap_netif->output(ap_netif, p, &dstIp);
+        pbuf_free(p);
+        return ERR_OK;
+      }
+    }
+  } else if (proto == IP_PROTO_ICMP) {
+    if (p->len >= hlen + 8) {
+      struct icmp_echo_hdr *icmphdr = (struct icmp_echo_hdr *)((u8_t *)p->payload + hlen);
+      if (icmphdr->type == 0) {
+        u16_t id = ntohs(icmphdr->id);
+        NatEntry *e = getInboundNat(id, IP_PROTO_ICMP);
+        if (e) {
+          iphdr->dest.addr = e->client_ip.addr;
+          icmphdr->id = htons(e->client_port);
+
+          u16_t icmp_len = p->tot_len - hlen;
+          icmphdr->chksum = 0;
+          pbuf_remove_header(p, hlen);
+          icmphdr->chksum = inet_chksum(p->payload, icmp_len);
+          pbuf_add_header(p, hlen);
+
+          IPH_CHKSUM_SET(iphdr, 0);
+          iphdr->_chksum = inet_chksum(iphdr, hlen);
+
+          natBytesRelayed += p->tot_len;
+
+          ip4_addr_t dstIp;
+          dstIp.addr = e->client_ip.addr;
+          ap_netif->output(ap_netif, p, &dstIp);
+          pbuf_free(p);
+          return ERR_OK;
+        }
+      }
+    }
+  }
+
+  return orig_wg_input ? orig_wg_input(p, inp) : ERR_OK;
 }
 
 inline bool start(IPAddress dnsServer = IPAddress(1, 1, 1, 1), Country country = Country::Direct, const String& customSrv = "") {
@@ -460,9 +645,9 @@ inline bool start(IPAddress dnsServer = IPAddress(1, 1, 1, 1), Country country =
   }
 
   upstreamDns = dnsServer;
-  setCountryGateway(country, customSrv);
+  currentCountry = country;
 
-  // Apply custom DNS to SoftAP DHCP server so connected devices get real DNS directly
+  // Apply DNS to SoftAP DHCP server so connected devices get valid DNS
   esp_netif_t *esp_ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
   if (esp_ap) {
     esp_netif_dhcps_stop(esp_ap);
@@ -480,6 +665,11 @@ inline bool start(IPAddress dnsServer = IPAddress(1, 1, 1, 1), Country country =
   nextPort = kNatPortStart;
   portEXIT_CRITICAL(&natMux);
   natBytesRelayed = 0;
+
+  // If a country VPN or custom tunnel is selected, start WireGuard encrypted VPN
+  if (country != Country::Direct) {
+    startWireGuard(country, customSrv);
+  }
 
   if (!natActive) {
     orig_ap_input = ap_netif->input;
@@ -499,6 +689,7 @@ inline void stop() {
     if (sta_netif && orig_sta_input) sta_netif->input = orig_sta_input;
     natActive = false;
   }
+  stopWireGuard();
   dnsUdp.stop();
   portENTER_CRITICAL(&natMux);
   for (uint16_t i = 0; i < kMaxNatEntries; i++) {
@@ -510,7 +701,7 @@ inline void stop() {
 inline void loop() {
   if (!natActive) return;
 
-  // Backup fallback DNS relay on port 53 (for any query caught by socket)
+  // Backup fallback DNS relay on port 53
   int packetSize = dnsUdp.parsePacket();
   if (packetSize > 0 && packetSize <= 512) {
     uint8_t dnsBuf[512];
@@ -564,6 +755,10 @@ inline void loop() {
 
 inline bool isActive() {
   return natActive;
+}
+
+inline bool isVpnEncrypted() {
+  return wgActive && wg_netif && netif_is_link_up(wg_netif);
 }
 
 inline uint32_t getBytesRelayed() {

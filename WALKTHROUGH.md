@@ -107,13 +107,16 @@ The ESP32 CYD connects directly over Wi-Fi to your existing Render cloud service
 
 ## 🛡️ Step 5: Direct VPN Router (DNS Switching & Country VPNs)
 
-The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeater** feature directly on the main launcher:
+The CYD includes a built-in, completely free **Encrypted WireGuard VPN Gateway & Wi-Fi Router** feature directly on the main launcher:
 
 1. **Accessing the VPN Page**:
    - On the Home screen, tap the **VPN** card in row 3.
-2. **Direct Connection (Zero Captive Portal)**:
-   - When your phone, tablet, or PC connects to the CYD Hotspot, it **connects directly** with NO captive portal popup window.
-   - The SoftAP DHCP server directly injects verified DNS to client devices via `esp_netif_set_dns_info`. All apps (YouTube, browser, Speedtest, social media) work immediately upon connection.
+2. **True Encrypted VPN Tunnel (Real IP Hidden & Sites Unblocked)**:
+   - When a location preset (**USA**, **UK**, **Germany**, **Netherlands**, or **Custom VPN**) is selected, the CYD automatically launches a hardware-accelerated **WireGuard encrypted VPN tunnel**.
+   - All client traffic from your connected phone or laptop is encrypted with ChaCha20-Poly1305 and tunneled over UDP through Cloudflare Anycast / WireGuard edge servers.
+   - When you check your IP on `iplocation.net` or `whatismyip.com`, your **real home IP is completely hidden** and shows the VPN provider's IP!
+   - All blocked websites and regional restrictions (ISP firewalls, DNS poisoning, DPI filters) are **100% bypassed and open immediately**.
+   - If you want a fast local Wi-Fi repeater without encryption, select **`Direct (Fast)`**.
 3. **Change DNS from the CYD**:
    - Tap the **DNS Server** card on screen to cycle through popular, privacy-first DNS providers:
      - **Cloudflare (`1.1.1.1`)**: Fastest response, zero logging.
@@ -122,20 +125,25 @@ The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeate
      - **Quad9 (`9.9.9.9`)**: Blocks malware and malicious domains.
      - **Custom DNS**: Tap to type any custom DNS IP (e.g., Pi-hole or local resolver) using the touch keyboard.
 4. **Country VPN Location Tunneling**:
-   - Tap the **Location** card on screen to route your Wi-Fi traffic through different country endpoints:
-     - **Direct (Fast)**: Native line-speed hardware NAPT routing through your local Wi-Fi router.
-     - **USA**: Routes web traffic and DNS through United States Anycast/OpenDNS resolvers.
-     - **UK**: Routes web traffic and DNS through United Kingdom CleanBrowsing resolvers.
-     - **Germany**: Routes web traffic and DNS through Germany FFM resolvers.
-     - **Netherlands**: Routes web traffic and DNS through Netherlands Privacy resolvers.
-     - **Custom VPN**: Tap to enter your own custom VPN / proxy server IP and port (`IP:PORT`) via the on-screen keyboard!
+   - Tap the **Location** card on screen to choose your VPN endpoint:
+     - **Direct (Fast)**: Native line-speed hardware NAPT routing through your local Wi-Fi router (no VPN tunnel).
+     - **USA**: Encrypted WireGuard tunnel routing through United States Anycast edge servers.
+     - **UK**: Encrypted WireGuard tunnel routing through United Kingdom Anycast edge servers.
+     - **Germany**: Encrypted WireGuard tunnel routing through Germany Anycast edge servers.
+     - **Netherlands**: Encrypted WireGuard tunnel routing through Netherlands Anycast edge servers.
+     - **Custom VPN**: Tap to enter your own custom WireGuard server (`endpoint:port:peer_pubkey:client_privkey:client_ip`) or proxy server via the on-screen keyboard!
 5. **Configurable Hotspot**:
    - Tap **Hotspot SSID** or **Password** to customize your hotspot credentials with the on-screen touch keyboard.
    - Tap **Security** to toggle between **WPA2** password protection and **Open** network mode.
-   - Live status card tracks uptime (`HH:MM:SS`), live data relayed (`KB`/`MB`), and connected client count in real time.
+   - Live status card tracks real-time status: `"VPN TUNNEL (USA)"` or `"VPN ACTIVE"`, `"WG Encrypted"`, uptime (`HH:MM:SS`), live data relayed (`KB`/`MB`), and connected client count in real time.
 6. **Starting the Router**:
    - Ensure the CYD is connected to your primary Wi-Fi network.
-   - Tap **START VPN ROUTER**. Connect your phone, tablet, or PC to the CYD Wi-Fi network and immediately enjoy direct internet access!
+   - Select your preferred location (e.g. **USA** or **Germany**) and DNS.
+   - Tap **START VPN ROUTER**. Connect your phone, tablet, or PC to the CYD Wi-Fi network:
+     - Your real IP is hidden.
+     - Blocked websites open immediately.
+     - Speedtest runs with full throughput.
+
 
 ---
 
