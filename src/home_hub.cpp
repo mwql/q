@@ -1745,31 +1745,49 @@ bool startVpn() {
     return false;
   }
 
-  showLoading("Starting Direct VPN...");
+  showLoading("Starting VPN Hotspot...");
 
-  // Switch to dual AP+STA mode
+  // Switch to dual AP+STA mode — keep STA connection alive
   WiFi.mode(WIFI_AP_STA);
-  delay(100);
+  delay(150);
 
-  // SoftAP on 192.168.4.1
+  // Re-apply TX power after mode switch (AP_STA can lower it)
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
+  // SoftAP on 192.168.4.x — the CYD is the gateway & DNS for all clients
   IPAddress apIP(192, 168, 4, 1);
   IPAddress apGW(192, 168, 4, 1);
   IPAddress apMask(255, 255, 255, 0);
   WiFi.softAPConfig(apIP, apGW, apMask);
   delay(50);
 
+  // Channel 1 keeps clear of the STA channel (usually 6 or 11 at home)
   bool ok;
   if (vpnSecured && vpnPassword.length() >= 8) {
-    ok = WiFi.softAP(vpnSsid.c_str(), vpnPassword.c_str(), 6, 0, 8);
+    ok = WiFi.softAP(vpnSsid.c_str(), vpnPassword.c_str(), 1, 0, 8);
   } else {
-    ok = WiFi.softAP(vpnSsid.c_str(), NULL, 6, 0, 8);
+    ok = WiFi.softAP(vpnSsid.c_str(), NULL, 1, 0, 8);
   }
   if (!ok) {
     showToast("Failed to start AP!");
     WiFi.mode(WIFI_STA);
     return false;
   }
-  delay(50);
+  delay(100);
+
+  // If STA dropped during mode switch, reconnect
+  if (WiFi.status() != WL_CONNECTED) {
+    showLoading("Reconnecting Wi-Fi...");
+    WiFi.reconnect();
+    uint32_t t = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t < 8000) delay(100);
+    if (WiFi.status() != WL_CONNECTED) {
+      showToast("Wi-Fi lost — reconnect & retry");
+      WiFi.softAPdisconnect(true);
+      WiFi.mode(WIFI_STA);
+      return false;
+    }
+  }
 
   // Start hardware-level NAPT & transparent DNS with selected country and DNS
   IPAddress dns = getSelectedDnsIp();
@@ -1780,6 +1798,49 @@ bool startVpn() {
   apWeb.on("/vpn", serveVpnWebPage);
   apWeb.on("/api/vpn/status", handleVpnStatusApi);
   apWeb.on("/api/vpn/import", HTTP_POST, handleVpnImportApi);
+
+  // ---- Captive-portal suppression ----
+  // iOS, macOS, Android, and Windows each probe specific URLs to decide whether
+  // a captive portal is present.  Returning the expected "success" response for
+  // each probe makes the OS believe the internet is fully working and suppresses
+  // the "Sign in to network" popup entirely, giving clients immediate internet.
+
+  // Apple (iOS / macOS) — expects 200 with body containing "Success"
+  auto appleCaptive = []() {
+    apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    apWeb.send(200, "text/html",
+      "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  };
+  apWeb.on("/hotspot-detect.html",           appleCaptive);
+  apWeb.on("/library/test/success.html",     appleCaptive);
+  apWeb.on("/success.txt",                   appleCaptive);
+
+  // Android / Chrome — expects HTTP 204 No Content
+  auto androidCaptive = []() {
+    apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    apWeb.send(204, "text/plain", "");
+  };
+  apWeb.on("/generate_204",                  androidCaptive);
+  apWeb.on("/gen_204",                       androidCaptive);
+  apWeb.on("/connectivitycheck.gstatic.com", androidCaptive);
+
+  // Windows — expects 200 with body "Microsoft NCSI"
+  apWeb.on("/ncsi.txt", []() {
+    apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    apWeb.send(200, "text/plain", "Microsoft NCSI");
+  });
+  apWeb.on("/connecttest.txt", []() {
+    apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    apWeb.send(200, "text/plain", "Microsoft Connect Test");
+  });
+
+  // Fallback: any unknown path also returns 200 so nothing redirects
+  apWeb.onNotFound([]() {
+    apWeb.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    apWeb.send(200, "text/html",
+      "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  });
+
   apWeb.begin();
 
   vpnRunning = true;
@@ -2185,7 +2246,7 @@ void drawVpn() {
       statusLine = "Handshaking with server...";
     } else {
       statusTitle = "TUNNEL OFFLINE (" + locStr + ")";
-      statusLine = "Open 192.168.4.1 to configure";
+      statusLine = "Connect to " + vpnSsid + ", open 192.168.4.1";
     }
     card(12, 42, 296, 38, statusTitle, statusLine, true);
   } else {
@@ -2226,7 +2287,11 @@ void drawVpn() {
 
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
-  tft.drawRightString(vpnRunning ? "Web Setup: 192.168.4.1" : "Tap card to change DNS/Location", 305, 224, 1);
+  if (vpnRunning) {
+    tft.drawRightString("Paste WG conf at 192.168.4.1", 305, 224, 1);
+  } else {
+    tft.drawRightString("Pick Location then tap START", 305, 224, 1);
+  }
 }
 
 void drawHome() {

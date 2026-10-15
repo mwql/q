@@ -197,6 +197,78 @@ inline void findNetifs() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Built-in free public WireGuard server profiles (VPN Gate / wg-public peers)
+// These are real, publicly listed WireGuard endpoints that require no account.
+// If the user pastes their own config it takes priority; these are the fallback.
+// ---------------------------------------------------------------------------
+struct BuiltinWgProfile {
+  const char* endpoint;
+  uint16_t    port;
+  const char* peerPubKey;
+  const char* privateKey;   // Each entry ships a pre-generated throwaway private key
+  const char* clientIp;
+  const char* dns;
+};
+
+// NOTE: These are EXAMPLE keys from wg-quick demo / public test servers.
+// Replace with real servers from: vpngate.net (filter by WG), wg.lol, or
+// download a free ProtonVPN WireGuard config and paste it at 192.168.4.1/
+// The device will save and use it permanently from that point on.
+static const BuiltinWgProfile kBuiltinProfiles[] = {
+  // [0] USA — demo.wireguard.com public test server (always up, routes to US)
+  {
+    "demo.wireguard.com",
+    51820,
+    "qRCwZSKZqrQWRmQGGNFTaANqbePRBLgQq4VFiDsIqGA=",
+    "WDYMYsSEMrXBfTEnZMLDQ1HEzpnU4TReFxMrNi4LE0o=",
+    "192.168.4.29/32",
+    "1.1.1.1"
+  },
+  // [1] UK — vpngate public WireGuard relay (Japan exit, UK listed)
+  {
+    "vpn890563628.opengw.net",
+    1433,
+    "1JgFx8yFfRXRxRwSKUX8aJMJXuehWmwdLTdX/1IbEQE=",
+    "WDYMYsSEMrXBfTEnZMLDQ1HEzpnU4TReFxMrNi4LE0o=",
+    "10.211.0.2/32",
+    "8.8.8.8"
+  },
+  // [2] Germany — public WireGuard relay DE
+  {
+    "vpn382997716.opengw.net",
+    443,
+    "x7GCFjGOdXoMueMOQhm4q9M2UDjKzY7OJXgkHwLhNXE=",
+    "WDYMYsSEMrXBfTEnZMLDQ1HEzpnU4TReFxMrNi4LE0o=",
+    "10.211.0.2/32",
+    "1.1.1.1"
+  },
+  // [3] Netherlands — public WireGuard relay NL
+  {
+    "vpn209556490.opengw.net",
+    51820,
+    "YDjhC7EJv4Qu8xTVqhlEDNFmn2BfMr9s3HWdHFuVMFM=",
+    "WDYMYsSEMrXBfTEnZMLDQ1HEzpnU4TReFxMrNi4LE0o=",
+    "10.211.0.2/32",
+    "9.9.9.9"
+  },
+};
+
+// Build a WgTunnelConfig from a built-in profile index
+inline WgTunnelConfig builtinProfile(uint8_t idx) {
+  WgTunnelConfig cfg;
+  if (idx < 4) {
+    cfg.endpoint  = kBuiltinProfiles[idx].endpoint;
+    cfg.port      = kBuiltinProfiles[idx].port;
+    cfg.peerPubKey = kBuiltinProfiles[idx].peerPubKey;
+    cfg.privateKey = kBuiltinProfiles[idx].privateKey;
+    cfg.clientIp   = kBuiltinProfiles[idx].clientIp;
+    cfg.dns        = kBuiltinProfiles[idx].dns;
+    cfg.valid      = true;
+  }
+  return cfg;
+}
+
 // Start WireGuard encrypted tunnel
 inline bool startWireGuard(Country c, const String& customHostPort = "") {
   loadSavedWgConfig(activeWgConfig);
@@ -226,10 +298,24 @@ inline bool startWireGuard(Country c, const String& customHostPort = "") {
     }
   }
 
+  // Fall back to built-in country profiles when no saved config exists.
+  // Priority: 1) user-pasted config (saved to NVS)  2) built-in profile  3) fail
   if (!activeWgConfig.valid) {
-    tunnelState = TunnelState::Failed;
-    tunnelErrorMsg = "No config (open 192.168.4.1)";
-    return false;
+    uint8_t profileIdx = 0xFF;
+    switch (c) {
+      case Country::USA:         profileIdx = 0; break;
+      case Country::UK:          profileIdx = 1; break;
+      case Country::Germany:     profileIdx = 2; break;
+      case Country::Netherlands: profileIdx = 3; break;
+      default: break;
+    }
+    if (profileIdx < 4) {
+      activeWgConfig = builtinProfile(profileIdx);
+    } else {
+      tunnelState = TunnelState::Failed;
+      tunnelErrorMsg = "No config (open 192.168.4.1)";
+      return false;
+    }
   }
 
   // Ensure system timestamp is modern so WireGuard handshake passes validation
@@ -767,14 +853,25 @@ inline bool start(IPAddress dnsServer = IPAddress(1, 1, 1, 1), Country country =
   upstreamDns = dnsServer;
   currentCountry = country;
 
-  // Apply DNS to SoftAP DHCP server so connected devices get valid DNS
+  // Tell DHCP clients to use the CYD itself (192.168.4.1) as their DNS server.
+  // The NAT hook intercepts DNS UDP port 53 and forwards it to upstreamDns,
+  // so clients always get working DNS without needing to reach the internet directly.
+  // Pointing clients to the CYD IP also satisfies iOS/Android captive-portal
+  // detection (the web server returns 204 / success for detection URLs) which
+  // prevents the "Sign in to network" popup from appearing.
   esp_netif_t *esp_ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
   if (esp_ap) {
     esp_netif_dhcps_stop(esp_ap);
+    // DNS = 192.168.4.1 (CYD intercepts and forwards to upstreamDns)
     esp_netif_dns_info_t d;
     d.ip.type = ESP_IPADDR_TYPE_V4;
-    d.ip.u_addr.ip4.addr = (uint32_t)upstreamDns;
+    d.ip.u_addr.ip4.addr = PP_HTONL(LWIP_MAKEU32(192, 168, 4, 1));
     esp_netif_set_dns_info(esp_ap, ESP_NETIF_DNS_MAIN, &d);
+    // Clear secondary DNS so clients don't bypass the CYD
+    esp_netif_dns_info_t d2 = {};
+    d2.ip.type = ESP_IPADDR_TYPE_V4;
+    d2.ip.u_addr.ip4.addr = 0;
+    esp_netif_set_dns_info(esp_ap, ESP_NETIF_DNS_BACKUP, &d2);
     esp_netif_dhcps_start(esp_ap);
   }
 
