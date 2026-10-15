@@ -105,28 +105,29 @@ The ESP32 CYD connects directly over Wi-Fi to your existing Render cloud service
 
 ---
 
-## 🛡️ Step 5: Free VPN Hotspot (Wi-Fi Repeater & Proxy)
+## 🛡️ Step 5: Direct VPN Router (Wi-Fi Repeater & NAPT)
 
-The CYD includes a built-in, completely free **VPN Hotspot & Wi-Fi Repeater** feature directly on the main launcher:
+The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeater** feature directly on the main launcher:
 
 1. **Accessing the VPN Page**:
    - On the Home screen, tap the **VPN** card in row 3.
-2. **Features on the Dedicated VPN Page**:
-   - **Live Status Card**: Displays VPN Active/Inactive status, uptime counter (`HH:MM:SS`), live data relayed counter (`KB`/`MB`), and connected client count.
-   - **Upstream Wi-Fi Card**: Displays current upstream network SSID and assigned local IP.
-   - **Customizable Hotspot**: Tap **AP SSID** or **Password** to customize your hotspot credentials with the on-screen touch keyboard.
-   - **Security Toggle**: Tap the **Security** card to switch between **WPA2** password protection and **Open** network mode.
-   - **Dual Proxy Servers**:
-     - **HTTP/HTTPS CONNECT Proxy** on port `8080`.
-     - **SOCKS5 Proxy** on port `1080`.
-   - **Auto PAC Config & Web Portal**:
-     - Connect any phone, tablet, or laptop to the CYD AP.
-     - Auto Proxy PAC URL: `http://192.168.4.1/proxy.pac`
-     - Web Status Portal: Navigate to `http://192.168.4.1` for a mobile-friendly dashboard.
-3. **Starting the VPN**:
+2. **Direct Connection (Zero Captive Portal)**:
+   - When your phone, tablet, or PC connects to the CYD Hotspot, it **connects directly** with NO captive portal popup window.
+   - Built-in captive portal suppressor answers OS network probes (`/generate_204`, `/hotspot-detect.html`) with instant HTTP 204 success so mobile devices immediately recognize live internet.
+3. **Hardware-Level NAPT Packet Forwarding**:
+   - Built directly on top of the lwIP stack in [`src/vpn_nat.h`](file:///c:/Users/X1/Documents/Codex/2026-10-05/c/outputs/src/vpn_nat.h).
+   - Translates IP headers, maps TCP & UDP ports (50000–60000), recalculates checksums, and routes outbound traffic from the AP client directly to the upstream Wi-Fi station network.
+   - Transparently routes inbound replies from the Internet back to the specific client device.
+4. **Transparent High-Speed DNS Relay**:
+   - Runs a non-blocking DNS proxy on UDP port 53.
+   - Forwards client DNS requests directly to secure upstream DNS (`1.1.1.1` Cloudflare / `8.8.8.8` Google) and relays verified responses back to the device.
+5. **Configurable Hotspot**:
+   - Tap **Hotspot SSID** or **Password** to customize your hotspot credentials with the on-screen touch keyboard.
+   - Tap **Security** to toggle between **WPA2** password protection and **Open** network mode.
+   - Live status card tracks uptime (`HH:MM:SS`), live data relayed (`KB`/`MB`), and connected client count in real time.
+6. **Starting the Router**:
    - Ensure the CYD is connected to your primary Wi-Fi network.
-   - Tap **START FREE VPN**. The CYD switches to dual `WIFI_AP_STA` mode, starts the new Access Point, spins up both proxy servers, launches the DNS responder and web portal, and routes client traffic seamlessly.
-   - Tap **STOP VPN** at any time to close all tunnels and restore regular station mode.
+   - Tap **START DIRECT VPN**. Connect any device to the CYD Wi-Fi network and immediately enjoy direct internet access!
 
 ---
 
@@ -140,8 +141,9 @@ The CYD includes a built-in, completely free **VPN Hotspot & Wi-Fi Repeater** fe
 | **Wi-Fi Diagnostics** | ✅ Verified | Hardware event listener decodes wrong password vs out-of-range |
 | **eWeLink Endpoints** | ✅ Verified | `/api/v1/devices` and toggle added to `mwaqqp-main` |
 | **All Fonts & Labels** | ✅ Verified | LOAD_FONT2, FONT4, FONT6, FONT7, GFXFF enabled in platformio.ini; Back button, Wi-Fi items, and key labels render crisply |
-| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (37.9% flash, 19.0% RAM) |
-| **Free VPN Hotspot** | ✅ Verified | Built-in HTTP (8080) & SOCKS5 (1080) proxy, DNS server, PAC auto-config on dedicated page |
+| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (37.8% flash, 19.6% RAM) |
+| **Direct VPN Router** | ✅ Verified | Hardware-level NAPT packet forwarding, zero captive portal, transparent DNS relay |
 | **Direct Cloud (No 3rd Device)** | ✅ Verified | Direct HTTPS to Render with `setInsecure()`, Apple Shortcut action, live status `/api/status/light` tested |
 | **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/` with valid manifest |
+
 

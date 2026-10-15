@@ -1,3 +1,4 @@
+#include "vpn_nat.h"
 // CYD Home Hub 2.0
 // A touch-first controller for the TPM408-2.8 / ESP32-2432S028R.
 // The CYD contains no cloud account password: a local Web Bridge owns the
@@ -114,17 +115,6 @@ uint32_t vpnStartTime = 0;
 uint32_t vpnLastRefresh = 0;
 uint32_t vpnBytesRelayed = 0;
 
-struct VpnTunnel {
-  WiFiClient client;
-  WiFiClient target;
-  bool active;
-  uint32_t lastActivity;
-};
-static const uint8_t kVpnMaxTunnels = 4;
-VpnTunnel vpnTunnels[kVpnMaxTunnels];
-WiFiServer vpnHttpServer(8080);
-WiFiServer vpnSocksServer(1080);
-DNSServer vpnDns;
 WebServer vpnWeb(80);
 
 String toastMessage;
@@ -1514,10 +1504,12 @@ void toggleWifiAp() {
 }
 
 
-// ---- Free VPN Hotspot (HTTP/SOCKS5 Proxy & Repeater) --------------------------
-// Shares the upstream Wi-Fi connection with a new Access Point.
-// Runs an HTTP/HTTPS CONNECT proxy on port 8080 and SOCKS5 proxy on port 1080,
-// plus a PAC auto-config and captive web portal on port 80. Free & self-contained.
+// ---- Free VPN Hotspot (Direct NAPT Wi-Fi Router) ------------------------------
+// Turns the CYD into a high-speed, direct Wi-Fi router & VPN hotspot:
+// Connects to upstream Wi-Fi (STA) and creates a new Access Point (AP).
+// Employs hardware-level NAPT packet forwarding and transparent DNS relay
+// so connected phones, tablets, and laptops connect directly with NO captive
+// portal popup and immediately have full internet access through the CYD!
 
 String vpnUptimeStr() {
   if (!vpnRunning) return "--";
@@ -1532,28 +1524,20 @@ String vpnUptimeStr() {
 }
 
 String vpnBytesStr() {
-  if (vpnBytesRelayed < 1024) {
-    return String(vpnBytesRelayed) + " B";
-  } else if (vpnBytesRelayed < 1048576) {
-    return String(vpnBytesRelayed / 1024.0, 1) + " KB";
+  uint32_t b = VpnNat::getBytesRelayed();
+  if (b < 1024) {
+    return String(b) + " B";
+  } else if (b < 1048576) {
+    return String(b / 1024.0, 1) + " KB";
   } else {
-    return String(vpnBytesRelayed / 1048576.0, 2) + " MB";
+    return String(b / 1048576.0, 2) + " MB";
   }
 }
 
 void stopVpn() {
   if (!vpnRunning) return;
-  vpnHttpServer.stop();
-  vpnSocksServer.stop();
-  vpnDns.stop();
+  VpnNat::stop();
   vpnWeb.stop();
-  for (uint8_t i = 0; i < kVpnMaxTunnels; i++) {
-    if (vpnTunnels[i].active) {
-      vpnTunnels[i].client.stop();
-      vpnTunnels[i].target.stop();
-      vpnTunnels[i].active = false;
-    }
-  }
   WiFi.softAPdisconnect(true);
   delay(50);
   WiFi.mode(WIFI_STA);
@@ -1572,11 +1556,13 @@ bool startVpn() {
     return false;
   }
 
-  showLoading("Starting VPN...");
+  showLoading("Starting VPN Router...");
 
+  // Switch to dual AP+STA mode
   WiFi.mode(WIFI_AP_STA);
   delay(100);
 
+  // SoftAP on 192.168.4.1
   IPAddress apIP(192, 168, 4, 1);
   IPAddress apGW(192, 168, 4, 1);
   IPAddress apMask(255, 255, 255, 0);
@@ -1596,240 +1582,55 @@ bool startVpn() {
   }
   delay(50);
 
-  vpnHttpServer.begin();
-  vpnSocksServer.begin();
-
-  vpnDns.setErrorReplyCode(DNSReplyCode::NoError);
-  vpnDns.start(53, "*", apIP);
-
-  vpnWeb.on("/proxy.pac", []() {
-    String pac = "function FindProxyForURL(url, host) {\n"
-                 "  return 'PROXY 192.168.4.1:8080; SOCKS5 192.168.4.1:1080; DIRECT';\n"
-                 "}\n";
-    vpnWeb.send(200, "application/x-ns-proxy-autoconfig", pac);
+  // Setup WebServer to prevent captive portal popups
+  // Returning 204 No Content tells Android and iOS that full internet is directly available
+  vpnWeb.on("/generate_204", []() {
+    vpnWeb.send(204, "text/plain", "");
   });
-  vpnWeb.onNotFound([]() {
+  vpnWeb.on("/gen_204", []() {
+    vpnWeb.send(204, "text/plain", "");
+  });
+  vpnWeb.on("/hotspot-detect.html", []() {
+    vpnWeb.send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  });
+  vpnWeb.on("/ncsi.txt", []() {
+    vpnWeb.send(200, "text/plain", "Microsoft NCSI");
+  });
+  vpnWeb.on("/connecttest.txt", []() {
+    vpnWeb.send(200, "text/plain", "Microsoft Connect Test");
+  });
+  vpnWeb.on("/", []() {
     String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-                  "<title>CYD Free VPN Hotspot</title>"
+                  "<title>CYD VPN Router</title>"
                   "<style>body{background:#121214;color:#f0f0f0;font-family:sans-serif;padding:24px;text-align:center;}"
                   ".card{background:#1e1e24;border-radius:12px;padding:20px;margin:16px auto;max-width:380px;border:1px solid #333;}"
                   ".badge{display:inline-block;background:#10b981;color:#000;font-weight:bold;padding:4px 12px;border-radius:20px;font-size:13px;}"
-                  "code{background:#2a2a34;color:#38bdf8;padding:3px 8px;border-radius:6px;font-size:15px;display:inline-block;margin:4px 0;}"
-                  "a{color:#38bdf8;text-decoration:none;}</style></head><body>"
-                  "<h2>CYD Free VPN Hotspot</h2>"
-                  "<div class='card'><span class='badge'>VPN ACTIVE</span>"
-                  "<p style='margin-top:14px'>All traffic routed through CYD.</p>"
-                  "<p><b>HTTP/HTTPS Proxy:</b><br><code>192.168.4.1:8080</code></p>"
-                  "<p><b>SOCKS5 Proxy:</b><br><code>192.168.4.1:1080</code></p>"
-                  "<p><b>Auto PAC:</b><br><a href='/proxy.pac'>http://192.168.4.1/proxy.pac</a></p>"
+                  "</style></head><body>"
+                  "<h2>CYD Direct VPN Router</h2>"
+                  "<div class='card'><span class='badge'>INTERNET ACTIVE</span>"
+                  "<p style='margin-top:14px'>Your device is directly connected to Wi-Fi via the CYD hardware router.</p>"
                   "</div></body></html>";
     vpnWeb.send(200, "text/html", html);
   });
   vpnWeb.begin();
 
-  for (uint8_t i = 0; i < kVpnMaxTunnels; i++) {
-    vpnTunnels[i].active = false;
-  }
+  // Start hardware-level NAPT & transparent DNS
+  IPAddress dns = WiFi.dnsIP();
+  if (dns.toString() == "0.0.0.0") dns = IPAddress(1, 1, 1, 1);
+  VpnNat::start(dns);
 
   vpnRunning = true;
   vpnStartTime = millis();
-  vpnBytesRelayed = 0;
   vpnClientCount = 0;
-  showToast("VPN Active: " + vpnSsid);
+  showToast("Direct VPN Active: " + vpnSsid);
   return true;
 }
 
 void processVpn() {
   if (!vpnRunning) return;
-
-  vpnDns.processNextRequest();
+  VpnNat::loop();
   vpnWeb.handleClient();
-
-  // Accept HTTP CONNECT proxy client
-  if (vpnHttpServer.hasClient()) {
-    WiFiClient newClient = vpnHttpServer.available();
-    if (newClient) {
-      int slot = -1;
-      for (uint8_t i = 0; i < kVpnMaxTunnels; i++) {
-        if (!vpnTunnels[i].active) { slot = i; break; }
-      }
-      if (slot >= 0) {
-        newClient.setTimeout(400);
-        String reqLine = newClient.readStringUntil('\n');
-        reqLine.trim();
-
-        String host = "";
-        uint16_t port = 80;
-        bool isConnect = reqLine.startsWith("CONNECT ");
-
-        if (isConnect) {
-          int sp1 = reqLine.indexOf(' ');
-          int sp2 = reqLine.indexOf(' ', sp1 + 1);
-          String targetStr = (sp2 > sp1) ? reqLine.substring(sp1 + 1, sp2) : reqLine.substring(sp1 + 1);
-          int colon = targetStr.indexOf(':');
-          if (colon > 0) {
-            host = targetStr.substring(0, colon);
-            port = targetStr.substring(colon + 1).toInt();
-          } else {
-            host = targetStr;
-            port = 443;
-          }
-        } else if (reqLine.startsWith("GET ") || reqLine.startsWith("POST ") || reqLine.startsWith("HEAD ")) {
-          int httpIdx = reqLine.indexOf("://");
-          if (httpIdx > 0) {
-            int slashIdx = reqLine.indexOf('/', httpIdx + 3);
-            String hostPort = (slashIdx > 0) ? reqLine.substring(httpIdx + 3, slashIdx) : reqLine.substring(httpIdx + 3);
-            int colon = hostPort.indexOf(':');
-            if (colon > 0) {
-              host = hostPort.substring(0, colon);
-              port = hostPort.substring(colon + 1).toInt();
-            } else {
-              host = hostPort;
-              port = 80;
-            }
-          }
-        }
-
-        if (host.length() > 0 && port > 0) {
-          WiFiClient target;
-          target.setTimeout(1200);
-          if (target.connect(host.c_str(), port)) {
-            if (isConnect) {
-              while (newClient.available()) {
-                String h = newClient.readStringUntil('\n');
-                if (h.length() <= 2) break;
-              }
-              newClient.print("HTTP/1.1 200 Connection Established\r\n\r\n");
-            } else {
-              target.println(reqLine);
-            }
-            vpnTunnels[slot].client = newClient;
-            vpnTunnels[slot].target = target;
-            vpnTunnels[slot].active = true;
-            vpnTunnels[slot].lastActivity = millis();
-          } else {
-            newClient.print("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            newClient.stop();
-          }
-        } else {
-          newClient.stop();
-        }
-      } else {
-        newClient.stop();
-      }
-    }
-  }
-
-  // Accept SOCKS5 proxy client
-  if (vpnSocksServer.hasClient()) {
-    WiFiClient newClient = vpnSocksServer.available();
-    if (newClient) {
-      int slot = -1;
-      for (uint8_t i = 0; i < kVpnMaxTunnels; i++) {
-        if (!vpnTunnels[i].active) { slot = i; break; }
-      }
-      if (slot >= 0) {
-        newClient.setTimeout(400);
-        if (newClient.read() == 0x05) {
-          int nmethods = newClient.read();
-          for (int m = 0; m < nmethods; m++) newClient.read();
-          uint8_t authResp[2] = {0x05, 0x00};
-          newClient.write(authResp, 2);
-
-          int ver = newClient.read();
-          int cmd = newClient.read();
-          newClient.read();
-          int atyp = newClient.read();
-
-          if (ver == 0x05 && cmd == 0x01) {
-            String host = "";
-            uint16_t port = 0;
-            if (atyp == 0x01) {
-              uint8_t ip[4];
-              newClient.readBytes(ip, 4);
-              host = String(ip[0]) + "." + String(ip[1]) + "." + String(ip[2]) + "." + String(ip[3]);
-            } else if (atyp == 0x03) {
-              int len = newClient.read();
-              if (len > 0 && len < 256) {
-                char dom[256];
-                newClient.readBytes(dom, len);
-                dom[len] = '\0';
-                host = String(dom);
-              }
-            }
-            uint8_t pBuf[2];
-            newClient.readBytes(pBuf, 2);
-            port = ((uint16_t)pBuf[0] << 8) | pBuf[1];
-
-            if (host.length() > 0 && port > 0) {
-              WiFiClient target;
-              target.setTimeout(1200);
-              if (target.connect(host.c_str(), port)) {
-                uint8_t reply[10] = {0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
-                newClient.write(reply, 10);
-                vpnTunnels[slot].client = newClient;
-                vpnTunnels[slot].target = target;
-                vpnTunnels[slot].active = true;
-                vpnTunnels[slot].lastActivity = millis();
-              } else {
-                uint8_t failReply[10] = {0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
-                newClient.write(failReply, 10);
-                newClient.stop();
-              }
-            } else {
-              newClient.stop();
-            }
-          } else {
-            newClient.stop();
-          }
-        } else {
-          newClient.stop();
-        }
-      } else {
-        newClient.stop();
-      }
-    }
-  }
-
-  // Stream data across active tunnels
-  uint8_t buf[256];
-  for (uint8_t i = 0; i < kVpnMaxTunnels; i++) {
-    if (!vpnTunnels[i].active) continue;
-
-    bool alive = true;
-    if (!vpnTunnels[i].client.connected() && !vpnTunnels[i].client.available()) alive = false;
-    if (!vpnTunnels[i].target.connected() && !vpnTunnels[i].target.available()) alive = false;
-    if (millis() - vpnTunnels[i].lastActivity > 30000) alive = false;
-
-    if (!alive) {
-      vpnTunnels[i].client.stop();
-      vpnTunnels[i].target.stop();
-      vpnTunnels[i].active = false;
-      continue;
-    }
-
-    int avail = vpnTunnels[i].client.available();
-    if (avail > 0) {
-      int toRead = min(avail, (int)sizeof(buf));
-      int bytes = vpnTunnels[i].client.read(buf, toRead);
-      if (bytes > 0) {
-        vpnTunnels[i].target.write(buf, bytes);
-        vpnBytesRelayed += bytes;
-        vpnTunnels[i].lastActivity = millis();
-      }
-    }
-
-    avail = vpnTunnels[i].target.available();
-    if (avail > 0) {
-      int toRead = min(avail, (int)sizeof(buf));
-      int bytes = vpnTunnels[i].target.read(buf, toRead);
-      if (bytes > 0) {
-        vpnTunnels[i].client.write(buf, bytes);
-        vpnBytesRelayed += bytes;
-        vpnTunnels[i].lastActivity = millis();
-      }
-    }
-  }
+  vpnBytesRelayed = VpnNat::getBytesRelayed();
 }
 
 
@@ -2179,11 +1980,11 @@ void handleKeyboardTap(int x, int y) {
 void drawVpn() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
-  drawStatusBar("FREE VPN HOTSPOT");
+  drawStatusBar("DIRECT VPN ROUTER");
 
   if (!wifiConnected && WiFi.status() != WL_CONNECTED) {
     drawEmptyState("[ ]", "WiFi Offline",
-                   "Connect to WiFi first to use VPN");
+                   "Connect to WiFi first to start VPN");
     card(12, 210, 70, 22, "< Back");
     return;
   }
@@ -2192,9 +1993,9 @@ void drawVpn() {
   if (vpnRunning) {
     vpnClientCount = WiFi.softAPgetStationNum();
     String statusLine = "Up: " + vpnUptimeStr() + "  Data: " + vpnBytesStr() + "  Clients: " + String(vpnClientCount);
-    card(12, 42, 296, 38, "VPN ACTIVE", statusLine, true);
+    card(12, 42, 296, 38, "ROUTER ACTIVE", statusLine, true);
   } else {
-    card(12, 42, 296, 38, "VPN Inactive", "Tap START to share Wi-Fi over VPN");
+    card(12, 42, 296, 38, "Router Inactive", "Tap START to share Wi-Fi directly");
   }
 
   // Upstream WiFi info
@@ -2203,14 +2004,14 @@ void drawVpn() {
   }
 
   // AP SSID & Password row
-  card(12, 114, 143, 28, "AP SSID", trimText(vpnSsid, 12));
+  card(12, 114, 143, 28, "Hotspot SSID", trimText(vpnSsid, 12));
   String passDisp = vpnSecured ? String(vpnPassword.length()) + " chars" : "Open";
   card(161, 114, 147, 28, "Password", passDisp);
 
-  // Proxy Ports & Security row
+  // Mode & Security row
   String secLabel = vpnSecured ? "WPA2" : "Open";
   card(12, 146, 143, 28, "Security", secLabel);
-  card(161, 146, 147, 28, "Proxy Ports", "8080 / 1080");
+  card(161, 146, 147, 28, "Mode", "Direct (No Portal)");
 
   // Toggle VPN button
   if (vpnRunning) {
@@ -2218,9 +2019,9 @@ void drawVpn() {
     tft.drawRoundRect(12, 178, 296, 34, 6, c.accent);
     tft.setTextColor(c.text, c.surfaceRaised);
     tft.setTextSize(1);
-    tft.drawCentreString("STOP VPN", 160, 186, 2);
+    tft.drawCentreString("STOP VPN ROUTER", 160, 186, 2);
   } else {
-    actionButton(12, 178, 296, 34, "START FREE VPN");
+    actionButton(12, 178, 296, 34, "START DIRECT VPN");
   }
 
   // Back button & info
@@ -2232,7 +2033,7 @@ void drawVpn() {
 
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
-  tft.drawRightString(vpnRunning ? "Auto PAC: :80/proxy.pac" : "100% Free Hotspot", 305, 224, 1);
+  tft.drawRightString(vpnRunning ? "Direct Wi-Fi / NAPT Active" : "Full Wi-Fi Internet Access", 305, 224, 1);
 }
 
 void drawHome() {
