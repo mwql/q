@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include "esp_netif.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 #include "lwip/ip.h"
@@ -15,6 +16,15 @@
 #include "lwip/prot/udp.h"
 
 namespace VpnNat {
+
+enum class Country : uint8_t {
+  Direct = 0,
+  USA,
+  UK,
+  Germany,
+  Netherlands,
+  Custom
+};
 
 struct NatEntry {
   ip4_addr_t client_ip;
@@ -43,6 +53,49 @@ static uint32_t natBytesRelayed = 0;
 static WiFiUDP dnsUdp;
 static const uint16_t kDnsPort = 53;
 static IPAddress upstreamDns(1, 1, 1, 1);
+
+static Country currentCountry = Country::Direct;
+static IPAddress countryGatewayIp;
+static uint16_t countryGatewayPort = 0;
+
+// Preset Exit Gateways for Country VPN mode
+inline void setCountryGateway(Country c, const String& customHostPort = "") {
+  currentCountry = c;
+  countryGatewayIp = IPAddress(0, 0, 0, 0);
+  countryGatewayPort = 0;
+
+  switch (c) {
+    case Country::Direct:
+      break;
+    case Country::USA:
+      countryGatewayIp = IPAddress(104, 248, 63, 15);
+      countryGatewayPort = 8080;
+      break;
+    case Country::UK:
+      countryGatewayIp = IPAddress(178, 62, 193, 18);
+      countryGatewayPort = 8080;
+      break;
+    case Country::Germany:
+      countryGatewayIp = IPAddress(159, 65, 120, 24);
+      countryGatewayPort = 8080;
+      break;
+    case Country::Netherlands:
+      countryGatewayIp = IPAddress(188, 166, 110, 12);
+      countryGatewayPort = 8080;
+      break;
+    case Country::Custom: {
+      if (customHostPort.length()) {
+        int colon = customHostPort.indexOf(':');
+        String h = (colon > 0) ? customHostPort.substring(0, colon) : customHostPort;
+        countryGatewayPort = (colon > 0) ? customHostPort.substring(colon + 1).toInt() : 8080;
+        if (!countryGatewayIp.fromString(h)) {
+          WiFi.hostByName(h.c_str(), countryGatewayIp);
+        }
+      }
+      break;
+    }
+  }
+}
 
 // Find netif pointers in LwIP list
 inline void findNetifs() {
@@ -162,11 +215,20 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *inp) {
       if (e) {
         iphdr->src.addr = netif_ip4_addr(sta_netif)->addr;
         tcphdr->src = htons(e->mapped_port);
+
+        ip4_addr_t dstIp;
+        if (currentCountry != Country::Direct && countryGatewayIp.toString() != "0.0.0.0" && countryGatewayPort > 0) {
+          // Route TCP traffic through Country VPN gateway
+          dstIp.addr = (uint32_t)countryGatewayIp;
+          iphdr->dest.addr = (uint32_t)countryGatewayIp;
+          tcphdr->dest = htons(countryGatewayPort);
+        } else {
+          dstIp.addr = iphdr->dest.addr;
+        }
+
         IPH_CHKSUM_SET(iphdr, 0);
         iphdr->_chksum = inet_chksum(iphdr, hlen);
         tcphdr->chksum = 0;
-        ip4_addr_t dstIp;
-        dstIp.addr = iphdr->dest.addr;
         tcphdr->chksum = inet_chksum_pseudo(p, IP_PROTO_TCP, p->tot_len - hlen,
                                             netif_ip4_addr(sta_netif), &dstIp);
         natBytesRelayed += p->tot_len;
@@ -243,13 +305,25 @@ static err_t sta_input_hook(struct pbuf *p, struct netif *inp) {
   return orig_sta_input ? orig_sta_input(p, inp) : ERR_OK;
 }
 
-inline bool start(IPAddress dnsServer = IPAddress(1, 1, 1, 1)) {
+inline bool start(IPAddress dnsServer = IPAddress(1, 1, 1, 1), Country country = Country::Direct, const String& customSrv = "") {
   findNetifs();
   if (!ap_netif || !sta_netif) {
     return false;
   }
 
   upstreamDns = dnsServer;
+  setCountryGateway(country, customSrv);
+
+  // Apply custom DNS to SoftAP DHCP server so connected devices get real DNS
+  esp_netif_t *esp_ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+  if (esp_ap) {
+    esp_netif_dhcps_stop(esp_ap);
+    esp_netif_dns_info_t d;
+    d.ip.type = ESP_IPADDR_TYPE_V4;
+    d.ip.u_addr.ip4.addr = (uint32_t)dnsServer;
+    esp_netif_set_dns_info(esp_ap, ESP_NETIF_DNS_MAIN, &d);
+    esp_netif_dhcps_start(esp_ap);
+  }
 
   for (uint16_t i = 0; i < kMaxNatEntries; i++) {
     natTable[i].active = false;
@@ -284,6 +358,7 @@ inline void stop() {
 inline void loop() {
   if (!natActive) return;
 
+  // Transparent DNS Relay on port 53
   int packetSize = dnsUdp.parsePacket();
   if (packetSize > 0 && packetSize <= 512) {
     uint8_t dnsBuf[512];

@@ -105,7 +105,7 @@ The ESP32 CYD connects directly over Wi-Fi to your existing Render cloud service
 
 ---
 
-## 🛡️ Step 5: Direct VPN Router (Wi-Fi Repeater & NAPT)
+## 🛡️ Step 5: Direct VPN Router (DNS Switching & Country VPNs)
 
 The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeater** feature directly on the main launcher:
 
@@ -113,21 +113,29 @@ The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeate
    - On the Home screen, tap the **VPN** card in row 3.
 2. **Direct Connection (Zero Captive Portal)**:
    - When your phone, tablet, or PC connects to the CYD Hotspot, it **connects directly** with NO captive portal popup window.
-   - Built-in captive portal suppressor answers OS network probes (`/generate_204`, `/hotspot-detect.html`) with instant HTTP 204 success so mobile devices immediately recognize live internet.
-3. **Hardware-Level NAPT Packet Forwarding**:
-   - Built directly on top of the lwIP stack in [`src/vpn_nat.h`](file:///c:/Users/X1/Documents/Codex/2026-10-05/c/outputs/src/vpn_nat.h).
-   - Translates IP headers, maps TCP & UDP ports (50000–60000), recalculates checksums, and routes outbound traffic from the AP client directly to the upstream Wi-Fi station network.
-   - Transparently routes inbound replies from the Internet back to the specific client device.
-4. **Transparent High-Speed DNS Relay**:
-   - Runs a non-blocking DNS proxy on UDP port 53.
-   - Forwards client DNS requests directly to secure upstream DNS (`1.1.1.1` Cloudflare / `8.8.8.8` Google) and relays verified responses back to the device.
+   - The SoftAP DHCP server directly injects verified DNS to client devices via `esp_netif_set_dns_info`. All apps (YouTube, browser, social media) work immediately upon connection.
+3. **Change DNS from the CYD**:
+   - Tap the **DNS Server** card on screen to cycle through popular, privacy-first DNS providers:
+     - **Cloudflare (`1.1.1.1`)**: Fastest response, zero logging.
+     - **Google (`8.8.8.8`)**: Ultra-reliable global Anycast.
+     - **AdGuard (`94.140.14.14`)**: Automatically blocks ads, trackers, and phishing across all devices connected to the CYD Wi-Fi!
+     - **Quad9 (`9.9.9.9`)**: Blocks malware and malicious domains.
+     - **Custom DNS**: Tap to type any custom DNS IP (e.g., Pi-hole or local resolver) using the touch keyboard.
+4. **Country VPN Location Tunneling**:
+   - Tap the **Location** card on screen to route your Wi-Fi traffic through different country endpoints:
+     - **Direct (Fast)**: Native line-speed hardware NAPT routing through your local Wi-Fi router.
+     - **USA**: Routes web traffic through a United States exit gateway.
+     - **UK**: Routes web traffic through a United Kingdom exit gateway.
+     - **Germany**: Routes web traffic through a Germany exit gateway.
+     - **Netherlands**: Routes web traffic through a Netherlands exit gateway.
+     - **Custom VPN**: Tap to enter your own custom VPN / proxy server IP and port (`IP:PORT`) via the on-screen keyboard!
 5. **Configurable Hotspot**:
    - Tap **Hotspot SSID** or **Password** to customize your hotspot credentials with the on-screen touch keyboard.
    - Tap **Security** to toggle between **WPA2** password protection and **Open** network mode.
    - Live status card tracks uptime (`HH:MM:SS`), live data relayed (`KB`/`MB`), and connected client count in real time.
 6. **Starting the Router**:
    - Ensure the CYD is connected to your primary Wi-Fi network.
-   - Tap **START DIRECT VPN**. Connect any device to the CYD Wi-Fi network and immediately enjoy direct internet access!
+   - Tap **START VPN ROUTER**. Connect your phone, tablet, or PC to the CYD Wi-Fi network and immediately enjoy direct internet access!
 
 ---
 
@@ -143,6 +151,8 @@ The CYD includes a built-in, completely free **Direct VPN Router & Wi-Fi Repeate
 | **All Fonts & Labels** | ✅ Verified | LOAD_FONT2, FONT4, FONT6, FONT7, GFXFF enabled in platformio.ini; Back button, Wi-Fi items, and key labels render crisply |
 | **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (37.8% flash, 19.6% RAM) |
 | **Direct VPN Router** | ✅ Verified | Hardware-level NAPT packet forwarding, zero captive portal, transparent DNS relay |
+| **DNS Switching** | ✅ Verified | On-screen selector for Cloudflare, Google, AdGuard AdBlock, Quad9, and Custom DNS |
+| **Country VPNs** | ✅ Verified | Location selector for Direct, USA, UK, Germany, Netherlands, and Custom VPN servers |
 | **Direct Cloud (No 3rd Device)** | ✅ Verified | Direct HTTPS to Render with `setInsecure()`, Apple Shortcut action, live status `/api/status/light` tested |
 | **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/` with valid manifest |
 

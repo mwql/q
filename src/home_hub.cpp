@@ -36,7 +36,7 @@ enum class Page : uint8_t {
 };
 enum class KeyboardTarget : uint8_t {
   None, WifiPassword, BridgeUrl, BridgeKey, IrCode, ApSsid, ApPassword, UserInput,
-  VpnSsid, VpnPassword
+  VpnSsid, VpnPassword, VpnDns, VpnCustomServer
 };
 enum class KeyboardMode : uint8_t { Lower, Upper, Symbols };
 
@@ -105,7 +105,7 @@ String capturedInputs[8];
 uint8_t capturedInputCount = 0;
 uint32_t lastEvilTwinRefresh = 0;
 
-// VPN (Free Proxy Hotspot) state
+// VPN (Direct NAPT Router) state
 bool vpnRunning = false;
 String vpnSsid = "CYD-VPN";
 String vpnPassword = "vpn12345";
@@ -115,7 +115,65 @@ uint32_t vpnStartTime = 0;
 uint32_t vpnLastRefresh = 0;
 uint32_t vpnBytesRelayed = 0;
 
-WebServer vpnWeb(80);
+enum class VpnLocation : uint8_t {
+  Direct = 0,
+  USA,
+  UK,
+  Germany,
+  Netherlands,
+  Custom
+};
+
+enum class VpnDnsMode : uint8_t {
+  Cloudflare = 0,
+  Google,
+  AdGuard,
+  Quad9,
+  Custom
+};
+
+VpnLocation vpnLocation = VpnLocation::Direct;
+VpnDnsMode vpnDnsMode = VpnDnsMode::Cloudflare;
+String vpnCustomDns = "1.1.1.1";
+String vpnCustomServer = "104.248.63.15:8080";
+
+const char* vpnLocationName(VpnLocation loc) {
+  switch (loc) {
+    case VpnLocation::Direct:      return "Direct (Fast)";
+    case VpnLocation::USA:         return "USA";
+    case VpnLocation::UK:          return "UK";
+    case VpnLocation::Germany:     return "Germany";
+    case VpnLocation::Netherlands: return "Netherlands";
+    case VpnLocation::Custom:      return "Custom VPN";
+    default:                       return "Direct";
+  }
+}
+
+const char* vpnDnsName(VpnDnsMode mode) {
+  switch (mode) {
+    case VpnDnsMode::Cloudflare: return "Cloudflare";
+    case VpnDnsMode::Google:     return "Google";
+    case VpnDnsMode::AdGuard:    return "AdGuard";
+    case VpnDnsMode::Quad9:      return "Quad9";
+    case VpnDnsMode::Custom:     return "Custom DNS";
+    default:                     return "Cloudflare";
+  }
+}
+
+IPAddress getSelectedDnsIp() {
+  switch (vpnDnsMode) {
+    case VpnDnsMode::Cloudflare: return IPAddress(1, 1, 1, 1);
+    case VpnDnsMode::Google:     return IPAddress(8, 8, 8, 8);
+    case VpnDnsMode::AdGuard:    return IPAddress(94, 140, 14, 14);
+    case VpnDnsMode::Quad9:      return IPAddress(9, 9, 9, 9);
+    case VpnDnsMode::Custom: {
+      IPAddress ip;
+      if (ip.fromString(vpnCustomDns)) return ip;
+      return IPAddress(1, 1, 1, 1);
+    }
+    default: return IPAddress(1, 1, 1, 1);
+  }
+}
 
 String toastMessage;
 String selectedSsid;
@@ -640,6 +698,10 @@ void loadSettings() {
   vpnSsid         = preferences.getString("vpn_ssid", "CYD-VPN");
   vpnPassword     = preferences.getString("vpn_pass", "vpn12345");
   vpnSecured      = preferences.getBool("vpn_sec", true);
+  vpnLocation     = (VpnLocation)preferences.getUChar("vpn_loc", 0);
+  vpnDnsMode      = (VpnDnsMode)preferences.getUChar("vpn_dns", 0);
+  vpnCustomDns    = preferences.getString("vpn_cdns", "1.1.1.1");
+  vpnCustomServer = preferences.getString("vpn_csrv", "104.248.63.15:8080");
   ledColorIndex   = preferences.getUChar("led_color", 2);
   if (ledColorIndex > 4) ledColorIndex = 2;
   applyLedColor();
@@ -1509,7 +1571,7 @@ void toggleWifiAp() {
 // Connects to upstream Wi-Fi (STA) and creates a new Access Point (AP).
 // Employs hardware-level NAPT packet forwarding and transparent DNS relay
 // so connected phones, tablets, and laptops connect directly with NO captive
-// portal popup and immediately have full internet access through the CYD!
+// portal popup and immediately have full internet access (YouTube, browser, apps)!
 
 String vpnUptimeStr() {
   if (!vpnRunning) return "--";
@@ -1537,7 +1599,6 @@ String vpnBytesStr() {
 void stopVpn() {
   if (!vpnRunning) return;
   VpnNat::stop();
-  vpnWeb.stop();
   WiFi.softAPdisconnect(true);
   delay(50);
   WiFi.mode(WIFI_STA);
@@ -1556,7 +1617,7 @@ bool startVpn() {
     return false;
   }
 
-  showLoading("Starting VPN Router...");
+  showLoading("Starting Direct VPN...");
 
   // Switch to dual AP+STA mode
   WiFi.mode(WIFI_AP_STA);
@@ -1582,54 +1643,20 @@ bool startVpn() {
   }
   delay(50);
 
-  // Setup WebServer to prevent captive portal popups
-  // Returning 204 No Content tells Android and iOS that full internet is directly available
-  vpnWeb.on("/generate_204", []() {
-    vpnWeb.send(204, "text/plain", "");
-  });
-  vpnWeb.on("/gen_204", []() {
-    vpnWeb.send(204, "text/plain", "");
-  });
-  vpnWeb.on("/hotspot-detect.html", []() {
-    vpnWeb.send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-  });
-  vpnWeb.on("/ncsi.txt", []() {
-    vpnWeb.send(200, "text/plain", "Microsoft NCSI");
-  });
-  vpnWeb.on("/connecttest.txt", []() {
-    vpnWeb.send(200, "text/plain", "Microsoft Connect Test");
-  });
-  vpnWeb.on("/", []() {
-    String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-                  "<title>CYD VPN Router</title>"
-                  "<style>body{background:#121214;color:#f0f0f0;font-family:sans-serif;padding:24px;text-align:center;}"
-                  ".card{background:#1e1e24;border-radius:12px;padding:20px;margin:16px auto;max-width:380px;border:1px solid #333;}"
-                  ".badge{display:inline-block;background:#10b981;color:#000;font-weight:bold;padding:4px 12px;border-radius:20px;font-size:13px;}"
-                  "</style></head><body>"
-                  "<h2>CYD Direct VPN Router</h2>"
-                  "<div class='card'><span class='badge'>INTERNET ACTIVE</span>"
-                  "<p style='margin-top:14px'>Your device is directly connected to Wi-Fi via the CYD hardware router.</p>"
-                  "</div></body></html>";
-    vpnWeb.send(200, "text/html", html);
-  });
-  vpnWeb.begin();
-
-  // Start hardware-level NAPT & transparent DNS
-  IPAddress dns = WiFi.dnsIP();
-  if (dns.toString() == "0.0.0.0") dns = IPAddress(1, 1, 1, 1);
-  VpnNat::start(dns);
+  // Start hardware-level NAPT & transparent DNS with selected country and DNS
+  IPAddress dns = getSelectedDnsIp();
+  VpnNat::start(dns, (VpnNat::Country)vpnLocation, vpnCustomServer);
 
   vpnRunning = true;
   vpnStartTime = millis();
   vpnClientCount = 0;
-  showToast("Direct VPN Active: " + vpnSsid);
+  showToast("VPN Active: " + vpnSsid);
   return true;
 }
 
 void processVpn() {
   if (!vpnRunning) return;
   VpnNat::loop();
-  vpnWeb.handleClient();
   vpnBytesRelayed = VpnNat::getBytesRelayed();
 }
 
@@ -1899,6 +1926,22 @@ void finishKeyboard() {
        }
        currentPage = Page::Vpn;
        break;
+     case KeyboardTarget::VpnDns:
+       if (keyboardValue.length() >= 7) {
+         vpnCustomDns = keyboardValue;
+         preferences.putString("vpn_cdns", vpnCustomDns);
+         showToast("DNS: " + vpnCustomDns);
+       }
+       currentPage = Page::Vpn;
+       break;
+     case KeyboardTarget::VpnCustomServer:
+       if (keyboardValue.length() >= 5) {
+         vpnCustomServer = keyboardValue;
+         preferences.putString("vpn_csrv", vpnCustomServer);
+         showToast("VPN Endpoint: " + vpnCustomServer);
+       }
+       currentPage = Page::Vpn;
+       break;
      default:
       currentPage = Page::Home;
       break;
@@ -1980,7 +2023,7 @@ void handleKeyboardTap(int x, int y) {
 void drawVpn() {
   const Theme& c = theme();
   tft.fillScreen(c.background);
-  drawStatusBar("DIRECT VPN ROUTER");
+  drawStatusBar("CYD VPN ROUTER");
 
   if (!wifiConnected && WiFi.status() != WL_CONNECTED) {
     drawEmptyState("[ ]", "WiFi Offline",
@@ -1989,42 +2032,42 @@ void drawVpn() {
     return;
   }
 
-  // Status card
+  // Row 1: Status Card (y=42, h=38)
   if (vpnRunning) {
     vpnClientCount = WiFi.softAPgetStationNum();
-    String statusLine = "Up: " + vpnUptimeStr() + "  Data: " + vpnBytesStr() + "  Clients: " + String(vpnClientCount);
-    card(12, 42, 296, 38, "ROUTER ACTIVE", statusLine, true);
+    String locStr = vpnLocationName(vpnLocation);
+    String statusLine = locStr + " | " + vpnUptimeStr() + " | " + vpnBytesStr() + " | " + String(vpnClientCount) + " dev";
+    card(12, 42, 296, 38, "VPN ACTIVE", statusLine, true);
   } else {
-    card(12, 42, 296, 38, "Router Inactive", "Tap START to share Wi-Fi directly");
+    card(12, 42, 296, 38, "VPN Ready", "Tap START to begin direct VPN sharing");
   }
 
-  // Upstream WiFi info
-  if (WiFi.status() == WL_CONNECTED) {
-    card(12, 84, 296, 26, "Upstream", WiFi.SSID() + " (" + WiFi.localIP().toString() + ")");
-  }
-
-  // AP SSID & Password row
-  card(12, 114, 143, 28, "Hotspot SSID", trimText(vpnSsid, 12));
+  // Row 2: Hotspot SSID / Password (y=84, h=28)
+  card(12, 84, 143, 28, "Hotspot SSID", trimText(vpnSsid, 12));
   String passDisp = vpnSecured ? String(vpnPassword.length()) + " chars" : "Open";
-  card(161, 114, 147, 28, "Password", passDisp);
+  card(161, 84, 147, 28, "Password", passDisp);
 
-  // Mode & Security row
+  // Row 3: DNS Server / Location (y=116, h=28)
+  card(12, 116, 143, 28, "DNS Server", trimText(vpnDnsName(vpnDnsMode), 12));
+  card(161, 116, 147, 28, "Location", trimText(vpnLocationName(vpnLocation), 12));
+
+  // Row 4: Security / Upstream Wi-Fi (y=148, h=28)
   String secLabel = vpnSecured ? "WPA2" : "Open";
-  card(12, 146, 143, 28, "Security", secLabel);
-  card(161, 146, 147, 28, "Mode", "Direct (No Portal)");
+  card(12, 148, 143, 28, "Security", secLabel);
+  card(161, 148, 147, 28, "Upstream", trimText(WiFi.SSID(), 14));
 
-  // Toggle VPN button
+  // Row 5: Action Button (y=180, h=34)
   if (vpnRunning) {
-    tft.fillRoundRect(12, 178, 296, 34, 6, c.surfaceRaised);
-    tft.drawRoundRect(12, 178, 296, 34, 6, c.accent);
+    tft.fillRoundRect(12, 180, 296, 34, 6, c.surfaceRaised);
+    tft.drawRoundRect(12, 180, 296, 34, 6, c.accent);
     tft.setTextColor(c.text, c.surfaceRaised);
     tft.setTextSize(1);
-    tft.drawCentreString("STOP VPN ROUTER", 160, 186, 2);
+    tft.drawCentreString("STOP VPN", 160, 188, 2);
   } else {
-    actionButton(12, 178, 296, 34, "START DIRECT VPN");
+    actionButton(12, 180, 296, 34, "START VPN ROUTER");
   }
 
-  // Back button & info
+  // Row 6: Back button & Info (y=218, h=22)
   tft.fillRoundRect(12, 218, 70, 22, 5, c.surface);
   tft.drawRoundRect(12, 218, 70, 22, 5, c.accent);
   tft.setTextColor(c.accent, c.surface);
@@ -2033,7 +2076,7 @@ void drawVpn() {
 
   tft.setTextColor(c.muted, c.background);
   tft.setTextSize(1);
-  tft.drawRightString(vpnRunning ? "Direct Wi-Fi / NAPT Active" : "Full Wi-Fi Internet Access", 305, 224, 1);
+  tft.drawRightString(vpnRunning ? "Direct Wi-Fi - No Portal" : "Tap card to change DNS/Location", 305, 224, 1);
 }
 
 void drawHome() {
@@ -3146,24 +3189,54 @@ void handleTap(int x, int y) {
   } else if (currentPage == Page::Vpn) {
     if (y >= 42 && y < 80) {
       if (vpnRunning) {
-        showToast("Relayed: " + vpnBytesStr() + " (" + String(vpnClientCount) + " clients)");
+        showToast(String(vpnLocationName(vpnLocation)) + " | " + vpnBytesStr() + " | " + String(vpnClientCount) + " dev");
       }
-    } else if (y >= 114 && y < 144) {
+    } else if (y >= 84 && y < 114) {
+      // Row 2: SSID / Password
       if (x < 160) {
         startKeyboard(KeyboardTarget::VpnSsid, "VPN SSID", vpnSsid, false);
       } else {
         startKeyboard(KeyboardTarget::VpnPassword, "VPN Password", vpnPassword, true);
       }
-    } else if (y >= 146 && y < 176) {
+    } else if (y >= 116 && y < 146) {
+      // Row 3: DNS Server / Location
+      if (x < 160) {
+        // Cycle DNS: Cloudflare -> Google -> AdGuard -> Quad9 -> Custom
+        uint8_t nextDns = (uint8_t)vpnDnsMode + 1;
+        if (nextDns > (uint8_t)VpnDnsMode::Custom) nextDns = 0;
+        vpnDnsMode = (VpnDnsMode)nextDns;
+        preferences.putUChar("vpn_dns", (uint8_t)vpnDnsMode);
+        if (vpnDnsMode == VpnDnsMode::Custom) {
+          startKeyboard(KeyboardTarget::VpnDns, "CUSTOM DNS IP", vpnCustomDns, false);
+        } else {
+          showToast(vpnDnsName(vpnDnsMode));
+          pageNeedsRedraw = true;
+        }
+      } else {
+        // Cycle Location: Direct -> USA -> UK -> Germany -> Netherlands -> Custom
+        uint8_t nextLoc = (uint8_t)vpnLocation + 1;
+        if (nextLoc > (uint8_t)VpnLocation::Custom) nextLoc = 0;
+        vpnLocation = (VpnLocation)nextLoc;
+        preferences.putUChar("vpn_loc", (uint8_t)vpnLocation);
+        if (vpnLocation == VpnLocation::Custom) {
+          startKeyboard(KeyboardTarget::VpnCustomServer, "CUSTOM VPN (IP:PORT)", vpnCustomServer, false);
+        } else {
+          showToast(vpnLocationName(vpnLocation));
+          pageNeedsRedraw = true;
+        }
+      }
+    } else if (y >= 148 && y < 178) {
+      // Row 4: Security / Upstream
       if (x < 160) {
         vpnSecured = !vpnSecured;
         preferences.putBool("vpn_sec", vpnSecured);
-        showToast(vpnSecured ? "WPA2 Security" : "Open (No Password)");
+        showToast(vpnSecured ? "WPA2 Security" : "Open Network");
         pageNeedsRedraw = true;
       } else {
-        showToast("HTTP: 8080 | SOCKS5: 1080");
+        showToast("Upstream: " + WiFi.SSID());
       }
-    } else if (y >= 178 && y < 214) {
+    } else if (y >= 180 && y < 216) {
+      // Row 5: Start / Stop button
       if (vpnRunning) {
         stopVpn();
       } else {
@@ -3171,6 +3244,7 @@ void handleTap(int x, int y) {
       }
       pageNeedsRedraw = true;
     } else if (y >= 216) {
+      // Back button
       navigateTo(Page::Home);
     }
   }
