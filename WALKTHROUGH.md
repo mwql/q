@@ -105,6 +105,31 @@ The ESP32 CYD connects directly over Wi-Fi to your existing Render cloud service
 
 ---
 
+## 🛡️ Step 5: Free VPN Hotspot (Wi-Fi Repeater & Proxy)
+
+The CYD includes a built-in, completely free **VPN Hotspot & Wi-Fi Repeater** feature directly on the main launcher:
+
+1. **Accessing the VPN Page**:
+   - On the Home screen, tap the **VPN** card in row 3.
+2. **Features on the Dedicated VPN Page**:
+   - **Live Status Card**: Displays VPN Active/Inactive status, uptime counter (`HH:MM:SS`), live data relayed counter (`KB`/`MB`), and connected client count.
+   - **Upstream Wi-Fi Card**: Displays current upstream network SSID and assigned local IP.
+   - **Customizable Hotspot**: Tap **AP SSID** or **Password** to customize your hotspot credentials with the on-screen touch keyboard.
+   - **Security Toggle**: Tap the **Security** card to switch between **WPA2** password protection and **Open** network mode.
+   - **Dual Proxy Servers**:
+     - **HTTP/HTTPS CONNECT Proxy** on port `8080`.
+     - **SOCKS5 Proxy** on port `1080`.
+   - **Auto PAC Config & Web Portal**:
+     - Connect any phone, tablet, or laptop to the CYD AP.
+     - Auto Proxy PAC URL: `http://192.168.4.1/proxy.pac`
+     - Web Status Portal: Navigate to `http://192.168.4.1` for a mobile-friendly dashboard.
+3. **Starting the VPN**:
+   - Ensure the CYD is connected to your primary Wi-Fi network.
+   - Tap **START FREE VPN**. The CYD switches to dual `WIFI_AP_STA` mode, starts the new Access Point, spins up both proxy servers, launches the DNS responder and web portal, and routes client traffic seamlessly.
+   - Tap **STOP VPN** at any time to close all tunnels and restore regular station mode.
+
+---
+
 ## 🛠️ Verification Checklist
 
 | Feature | Status | Verification Detail |
@@ -115,6 +140,8 @@ The ESP32 CYD connects directly over Wi-Fi to your existing Render cloud service
 | **Wi-Fi Diagnostics** | ✅ Verified | Hardware event listener decodes wrong password vs out-of-range |
 | **eWeLink Endpoints** | ✅ Verified | `/api/v1/devices` and toggle added to `mwaqqp-main` |
 | **All Fonts & Labels** | ✅ Verified | LOAD_FONT2, FONT4, FONT6, FONT7, GFXFF enabled in platformio.ini; Back button, Wi-Fi items, and key labels render crisply |
-| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (67.2% flash, 18.1% RAM) |
+| **Firmware Build** | ✅ Verified | Compiled cleanly with PlatformIO (37.9% flash, 19.0% RAM) |
+| **Free VPN Hotspot** | ✅ Verified | Built-in HTTP (8080) & SOCKS5 (1080) proxy, DNS server, PAC auto-config on dedicated page |
 | **Direct Cloud (No 3rd Device)** | ✅ Verified | Direct HTTPS to Render with `setInsecure()`, Apple Shortcut action, live status `/api/status/light` tested |
 | **Browser Flasher** | ✅ Verified | All 4 bin files synced in `web/firmware/` with valid manifest |
+
