@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr"> 
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mwq's Bot Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Tajawal:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --secondary: #8b5cf6;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --success: #10b981;
+            --danger: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', 'Tajawal', sans-serif;
+            background-color: var(--bg);
+            background-image: 
+                radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.15) 0, transparent 50%),
+                radial-gradient(circle at 100% 100%, rgba(139, 92, 246, 0.15) 0, transparent 50%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+            z-index: 1;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: var(--text-dim);
+            font-size: 1.1rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+            gap: 1.25rem;
+            perspective: 1000px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 1.5rem;
+            padding: 1.4rem;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            animation: zoomIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        .card:hover {
+            transform: translateY(-10px) rotateX(2deg);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.15rem;
+        }
+
+        .bot-card { min-height: 220px; display: flex; flex-direction: column; }
+        .bot-card .bot-controls { margin-top: auto; }
+        .bot-switcher { grid-column: span 2; min-height: 260px; }
+        .bot-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; padding: 0.35rem; border-radius: 0.8rem; background: rgba(15, 23, 42, 0.6); }
+        .bot-tab { flex: 1; border: 0; border-radius: 0.55rem; padding: 0.6rem 0.8rem; color: var(--text-dim); background: transparent; cursor: pointer; font-weight: 700; }
+        .bot-tab.active { color: white; background: var(--primary); box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35); }
+        .bot-panel { display: none; }
+        .bot-panel.active { display: block; animation: fadeIn 0.2s ease; }
+
+        .suggestions-box {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.6), rgba(15, 23, 42, 0.6));
+            border: 1px solid var(--primary);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            margin-top: 1rem;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            text-align: left;
+            font-size: 0.85rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .suggestions-title {
+            font-weight: 600;
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }
+
+        .suggestion-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-main);
+            gap: 0.5rem;
+            padding: 0.4rem 0.6rem;
+            border-radius: 0.4rem;
+            transition: background 0.2s ease, transform 0.2s ease;
+        }
+
+        .suggestion-item:hover {
+            background: rgba(99, 102, 241, 0.15);
+            transform: translateX(4px);
+        }
+
+        .suggestion-item span::before {
+            content: "💤";
+            margin-right: 0.3rem;
+        }
+
+        .suggestion-btn {
+            background: var(--primary);
+            border: 1px solid var(--primary);
+            color: #fff;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 600;
+            transition: background 0.2s ease, transform 0.2s ease;
+        }
+
+        .suggestion-btn:hover {
+            background: var(--secondary);
+            transform: scale(1.05);
+        }
+
+        .bot-info h2 {
+            font-size: 1.5rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .status-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-online {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .status-offline {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        } 
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 10px currentColor;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .stat-box {
+            background: rgba(15, 23, 42, 0.5);
+            padding: 1rem;
+            border-radius: 1rem;
+            text-align: center;
+        }
+
+        .stat-value {
+            display: block;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        footer {
+            margin-top: 4rem;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.875rem;
+            animation: fadeIn 1s ease-in;
+        }
+
+        .pulse {
+            animation: pulse-animation 2s infinite;
+        }
+
+        @keyframes pulse-animation {
+            0% { box-shadow: 0 0 0 0px rgba(16, 185, 129, 0.4); }
+            100% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+        }
+
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes zoomIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* --- Logs Section Styles (Mobile Optimized) --- */
+        .logs-section {
+            grid-column: 1 / -1;
+            margin-top: 1rem;
+        }
+
+        .log-container {
+            background: #060913;
+            border-radius: 1rem;
+            padding: 1rem;
+            height: 380px;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 2px 14px rgba(0, 0, 0, 0.6);
+            -webkit-overflow-scrolling: touch;
+        }
+
+        #log-content {
+            font-family: 'Fira Code', 'Courier New', Consolas, monospace;
+            font-size: 0.88rem;
+            line-height: 1.55;
+        }
+
+        .log-empty {
+            color: #64748b;
+            font-style: italic;
+            text-align: center;
+            padding: 2.5rem 1rem;
+        }
+
+        .log-row {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            padding: 0.75rem 0.85rem;
+            margin-bottom: 0.55rem;
+            border-radius: 0.65rem;
+            border-left: 4px solid #64748b;
+            background: rgba(255, 255, 255, 0.03);
+            transition: background 0.15s ease;
+        }
+
+        .log-row:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .log-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+        }
+
+        .log-time {
+            color: #94a3b8;
+            font-size: 0.78rem;
+            font-weight: 500;
+        }
+
+        .log-tag {
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .log-message {
+            color: #f1f5f9;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+            font-size: 0.88rem;
+            line-height: 1.5;
+        }
+
+        .log-error { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.09); } 
+        .log-error .log-tag { color: #fca5a5; background: rgba(239, 68, 68, 0.22); }
+        .log-error .log-message { color: #fecaca; }
+
+        .log-sheet { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.09); } 
+        .log-sheet .log-tag { color: #fde68a; background: rgba(245, 158, 11, 0.22); }
+
+        .log-status { border-left-color: #10b981; background: rgba(16, 185, 129, 0.09); } 
+        .log-status .log-tag { color: #a7f3d0; background: rgba(16, 185, 129, 0.22); }
+
+        .log-discord { border-left-color: #818cf8; background: rgba(129, 140, 248, 0.09); } 
+        .log-discord .log-tag { color: #c7d2fe; background: rgba(129, 140, 248, 0.22); }
+
+        .log-info { border-left-color: #38bdf8; background: rgba(56, 189, 248, 0.07); } 
+        .log-info .log-tag { color: #bae6fd; background: rgba(56, 189, 248, 0.22); }
+
+        .log-legend { 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 0.6rem 1rem; 
+            font-size: 0.75rem; 
+            color: var(--text-dim); 
+            margin: -0.4rem 0 1rem; 
+        }
+        .log-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+
+        .refresh-btn {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            border: 1px solid rgba(99, 102, 241, 0.25);
+            padding: 0.45rem 0.9rem;
+            border-radius: 0.65rem;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+
+        .refresh-btn:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        .log-container::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .log-container::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .log-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+        }
+
+        @media (min-width: 768px) {
+            .log-row {
+                flex-direction: row;
+                align-items: baseline;
+                gap: 0.85rem;
+                padding: 0.6rem 0.85rem;
+                margin-bottom: 0.45rem;
+            }
+            .log-meta {
+                flex-shrink: 0;
+            }
+            .log-tag {
+                min-width: 65px;
+                text-align: center;
+            }
+            .log-message {
+                flex: 1;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .log-container {
+                padding: 0.75rem;
+                height: 350px;
+            }
+            .log-row {
+                padding: 0.65rem 0.75rem;
+            }
+            .log-message {
+                font-size: 0.85rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div style="margin-bottom: 1.25rem;">
+                <div style="display: flex; justify-content: center; gap: 0.65rem; flex-wrap: wrap;">
+                    <a href="/" style="display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.45rem 1.15rem; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 9999px; color: #cbd5e1; text-decoration: none; font-size: 0.88rem; font-weight: 500; transition: all 0.2s ease;">
+                        <span>←</span> mwq-dev.top Portfolio
+                    </a>
+                    <a href="/sleep" style="display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.45rem 1.15rem; background: rgba(99, 102, 241, 0.18); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 9999px; color: #c7d2fe; text-decoration: none; font-size: 0.88rem; font-weight: 600; transition: all 0.2s ease;">
+                        <span>🌙</span> Sleep Scheduler (/sleep)
+                    </a>
+                </div>
+            </div>
+            <h1>Bot Dashboard</h1>
+            <p class="subtitle">All systems are operational ⚡ &bull; mwq-dev.top/dis</p>
+        </header>
+
+        <div class="grid">
+            <!-- Bot control card -->
+            <div class="card bot-switcher" style="animation-delay: 0.1s;">
+                <div class="bot-tabs" role="tablist" aria-label="Bot controls">
+                    <button class="bot-tab active" onclick="switchBot('general', this)">General</button>
+                    <button class="bot-tab" onclick="switchBot('conan', this)">gen2</button>
+                    <button class="bot-tab" onclick="switchBot('lists', this)">Watch List</button>
+                </div>
+                <div id="bot-general" class="bot-panel active">
+                <div class="card-header">
+                    <div class="bot-info">
+                        <h2>General Assistant</h2>
+                        <p class="subtitle">General Bot</p>
+                    </div>
+                    <div class="status-badge {{GENERAL_STATUS_CLASS}}">
+                        <span class="status-dot {{GENERAL_PULSE}}"></span>
+                        {{GENERAL_STATUS_TEXT}}
+                    </div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <span class="stat-label">Guild Count</span>
+                        <span class="stat-value">{{GENERAL_GUILDS}}</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">Latency</span>
+                        <span class="stat-value">{{GENERAL_PING}}ms</span>
+                    </div>
+                </div>
+                <div class="bot-controls">
+                    <button class="control-btn btn-start" onclick="botAction('general', 'start')">
+                        <span class="status-dot" style="width: 6px; height: 6px;"></span> Start
+                    </button>
+                    <button class="control-btn btn-stop" onclick="botAction('general', 'stop')">
+                        <span class="status-dot" style="width: 6px; height: 6px; background: currentColor;"></span> Stop
+                    </button>
+                </div>
+                </div>
+
+                <div id="bot-conan" class="bot-panel">
+                <div class="card-header">
+                    <div class="bot-info">
+                        <h2>gen2 bot</h2>
+                        <p class="subtitle">gen2 bot</p>
+                    </div>
+                    <div class="status-badge {{CONAN_STATUS_CLASS}}">
+                        <span class="status-dot {{CONAN_PULSE}}"></span>
+                        {{CONAN_STATUS_TEXT}}
+                    </div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <span class="stat-label">Guild Count</span>
+                        <span class="stat-value">{{CONAN_GUILDS}}</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">Latency</span>
+                        <span class="stat-value">{{CONAN_PING}}ms</span>
+                    </div>
+                </div>
+                <div class="bot-controls">
+                    <button class="control-btn btn-start" onclick="botAction('conan', 'start')">
+                        <span class="status-dot" style="width: 6px; height: 6px;"></span> Start
+                    </button>
+                    <button class="control-btn btn-stop" onclick="botAction('conan', 'stop')">
+                        <span class="status-dot" style="width: 6px; height: 6px; background: currentColor;"></span> Stop
+                    </button>
+                </div>
+                </div>
+
+                <div id="bot-lists" class="bot-panel">
+                <div class="card-header">
+                    <div class="bot-info">
+                        <h2>Watch List</h2>
+                        <p class="subtitle">Movies &amp; Series</p>
+                    </div>
+                    <div class="status-badge {{LIST_STATUS_CLASS}}">
+                        <span class="status-dot {{LIST_PULSE}}"></span>
+                        {{LIST_STATUS_TEXT}}
+                    </div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <span class="stat-label">Guild Count</span>
+                        <span class="stat-value">{{LIST_GUILDS}}</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">Latency</span>
+                        <span class="stat-value">{{LIST_PING}}ms</span>
+                    </div>
+                </div>
+                <div class="bot-controls">
+                    <button class="control-btn btn-start" onclick="botAction('lists', 'start')">Start</button>
+                    <button class="control-btn btn-stop" onclick="botAction('lists', 'stop')">Stop</button>
+                </div>
+                </div>
+            </div>
+
+            <!-- Smart Home Section -->
+            <div class="card smarthome-section" style="animation-delay: 0.25s;">
+                <div class="card-header">
+                    <div class="bot-info">
+                        <h2>Smart Home (Sonoff)</h2>
+                        <p class="subtitle">Control your devices via eWeLink</p>
+                    </div>
+                </div>
+                <div id="device-list" class="device-grid">
+                    <!-- Devices will be injected here -->
+                    <p style="color: var(--text-dim); text-align: center; grid-column: 1/-1;">Loading devices...</p>
+                </div>
+            </div>
+
+            <!-- System Logs Section -->
+            <div class="card logs-section" style="animation-delay: 0.3s;">
+                <div class="card-header">
+                    <div class="bot-info">
+                        <h2>System Logs</h2>
+                        <p class="subtitle">Recent bot activity and events</p>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem;"><button class="refresh-btn" onclick="copyLogs()" title="Copy all logs">📋 Copy</button><button class="refresh-btn" onclick="refreshLogs()">🔄 Refresh</button></div>
+                </div>
+                <div class="log-legend"><span>🟢 Bot status</span><span>🟡 Sheet / rows</span><span>🟣 Discord</span><span>🔴 Errors</span><span>🔵 System</span></div>
+                <div class="log-container">
+                    <div id="log-content"></div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>&copy; 2026 • Powered by Render & Antigravity</p>
+            <p style="margin-top: 0.5rem; opacity: 0.5;">Bot Uptime: 100% (Simulation)</p>
+        </footer>
+    </div>
+
+    <script>
+        function logKind(line) {
+            if (/\[ERROR\]|\b(error|failed|exception|rejection)\b/i.test(line)) return ['error', 'ERROR'];
+            if (/polling sheet|found \d+ rows|\bsheet\b|\brows?\b|google/i.test(line)) return ['sheet', 'SHEET'];
+            if (/discord|slash commands|executed \/|interaction|message update|gateway|sheet-toggle|movie-repeat|auto-reply|\[list bot\]/i.test(line)) return ['discord', 'DISCORD'];
+            if (/online|offline|starting|stopping|status:|logged in|listening on port/i.test(line)) return ['status', 'STATUS'];
+            return ['info', 'SYSTEM'];
+        }
+
+        function copyLogs() {
+            const lines = [];
+            document.querySelectorAll('#log-content .log-row').forEach(row => {
+                lines.push(row.innerText.replace(/\n/g, ' '));
+            });
+            const text = lines.join('\n');
+            if (!text) return;
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(text).then(() => alert('Logs copied to clipboard!')).catch(() => {});
+            }
+        }
+
+        function renderLogs(logs) {
+            const logElement = document.getElementById('log-content');
+            const lines = logs.split('\n').filter(Boolean);
+            logElement.replaceChildren();
+            if (!lines.length) { 
+                const empty = document.createElement('div');
+                empty.className = 'log-empty';
+                empty.textContent = 'No logs recorded yet...';
+                logElement.appendChild(empty);
+                return; 
+            }
+            lines.forEach(line => {
+                const match = line.match(/^--\[([^\]]+)\]\s*\[[^\]]+\]\s*(.*)$/);
+                const [kind, label] = logKind(line);
+                const row = document.createElement('div'); 
+                row.className = `log-row log-${kind}`;
+                
+                const meta = document.createElement('div');
+                meta.className = 'log-meta';
+                
+                const time = document.createElement('span'); 
+                time.className = 'log-time'; 
+                time.textContent = match ? match[1] : '—';
+                
+                const tag = document.createElement('span'); 
+                tag.className = 'log-tag'; 
+                tag.textContent = label;
+                
+                meta.append(time, tag);
+
+                const message = document.createElement('div'); 
+                message.className = 'log-message'; 
+                message.textContent = match ? match[2] : line;
+
+                row.append(meta, message); 
+                logElement.appendChild(row);
+            });
+        }
+
+        async function refreshLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                if (!response.ok) throw new Error('Network response was not ok');
+                const logs = await response.text();
+                const logElement = document.getElementById('log-content');
+                const logContainer = document.querySelector('.log-container');
+                
+                // التحقق مما إذا كان المستخدم في أسفل السجل حالياً
+                const isScrolledToBottom = logContainer.scrollHeight - logContainer.clientHeight <= logContainer.scrollTop + 20;
+                
+                renderLogs(logs);
+                
+                // التمرير للأسفل تلقائياً إذا كان المستخدم يتابع السجلات الحية
+                if (isScrolledToBottom) {
+                    logContainer.scrollTo({
+                        top: logContainer.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to refresh logs:', err);
+            }
+        }
+
+        async function fetchEwelinkDevices() {
+            try {
+                const response = await fetch('/api/ewelink/devices?t=' + new Date().getTime());
+                const devices = await response.json();
+                const container = document.getElementById('device-list');
+                
+                if (devices.error || devices.length === 0) {
+                    container.innerHTML = `
+                        <div style="grid-column: 1/-1; text-align: center; padding: 2rem;">
+                            <p style="color: var(--danger); margin-bottom: 1rem;">
+                                ${devices.error ? devices.error : "No connection to eWeLink. Please authorize your account."}
+                            </p>
+                            <a href="/api/ewelink/oauth" class="control-btn btn-start" style="display: inline-flex; text-decoration: none; max-width: 200px; margin: 0 auto; justify-content: center;">Connect eWeLink</a>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = devices.map(dev => `
+                    <div class="device-card">
+                        <div class="device-header">
+                            <span class="device-name">${dev.name}</span>
+                            <span class="${dev.online ? 'online-tag' : 'offline-tag'}">${dev.online ? 'ONLINE' : 'OFFLINE'}</span>
+                        </div>
+                        <div class="switch-container">
+                            <span class="device-status">Status: ${(dev.params?.switch || 'OFF').toUpperCase()}</span>
+                            <label class="switch">
+                                <input type="checkbox" ${dev.params?.switch === 'on' ? 'checked' : ''} onchange="toggleEwelinkDevice('${dev.deviceid}', this.checked)">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                console.error('Failed to fetch devices:', err);
+            }
+        }
+
+        async function toggleEwelinkDevice(id, isChecked) {
+            const action = isChecked ? 'on' : 'off';
+            try {
+                const response = await fetch('/api/ewelink/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ deviceid: id, action })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.message);
+                console.log(`Device ${id} set to ${action}`);
+            } catch (err) {
+                alert('Failed to toggle device: ' + err.message);
+                fetchEwelinkDevices(); // Revert UI
+            }
+        }
+
+        // تحديث السجلات كل 5 ثوانٍ
+        refreshLogs();
+        setInterval(refreshLogs, 5000);
+        setInterval(fetchEwelinkDevices, 10000); // Update devices every 10s
+
+        function switchBot(bot, tab) {
+            document.querySelectorAll('.bot-panel').forEach(panel => panel.classList.remove('active'));
+            document.querySelectorAll('.bot-tab').forEach(button => button.classList.remove('active'));
+            document.getElementById(`bot-${bot}`).classList.add('active');
+            tab.classList.add('active');
+        }
+        
+        async function botAction(bot, action) {
+            const btn = event.currentTarget;
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = 'Processing...';
+
+            try {
+                const response = await fetch('/api/bot/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bot, action })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.message || 'Action failed');
+                }
+
+                console.log(data.message);
+                
+                // Refresh after a small delay to show status change
+                setTimeout(() => {
+                    location.reload();
+                }, 1000);
+            } catch (err) {
+                console.error('Bot action failed:', err);
+                alert('Error: ' + err.message);
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
+        // --- Sleep Scheduler Logic ---
+        function updateKuwaitClock() {
+            try {
+                const formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: 'Asia/Kuwait',
+                    hour: 'numeric',
+                    minute: 'numeric',
+                    second: 'numeric',
+                    hour12: true
+                });
+                const clockEl = document.getElementById('kuwait-clock');
+                if (clockEl) {
+                    clockEl.textContent = formatter.format(new Date());
+                }
+            } catch (err) {
+                console.error('Clock error:', err);
+            }
+        }
+
+        // التمرير للأسفل عند تحميل الصفحة لأول مرة
+        window.addEventListener('load', () => {
+            const logContainer = document.querySelector('.log-container');
+            logContainer.scrollTop = logContainer.scrollHeight;
+            fetchEwelinkDevices(); // Initial fetch
+            
+        });
+    </script>
+</body>
+</html>

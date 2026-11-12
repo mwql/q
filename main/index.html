@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mahdi | Web Developer & Discord Bot Architect (mwq-dev.top)</title>
+    <meta name="description" content="Official portfolio of Mahdi (mwq-dev.top) — Web developer and Discord bot architect based in Kuwait. Explore featured projects, skills, and bot dashboards.">
+    <meta name="keywords" content="Mahdi, mwq-dev, mwq-dev.top, web developer kuwait, discord bot, portfolio, python, javascript">
+    
+    <!-- Open Graph / Meta -->
+    <meta property="og:title" content="Mahdi | Web Developer & Bot Architect">
+    <meta property="og:description" content="Explore my portfolio, live projects, and Discord bot dashboard on mwq-dev.top.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://mwq-dev.top">
+    
+    <!-- Fonts & Stylesheet -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <!-- Background Ambient Glows -->
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+    <div class="ambient-glow glow-3"></div>
+
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <a href="/" class="brand-logo" aria-label="Home">
+                <span class="brand-badge">MWQ</span>
+                <span class="brand-name">mwq-dev.top</span>
+            </a>
+
+            <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation menu">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"/>
+                </svg>
+            </button>
+
+            <ul class="nav-links" id="navLinks">
+                <li><a href="/" class="nav-link active">Home</a></li>
+                <li><a href="/about" class="nav-link">About</a></li>
+                <li><a href="/sleep" class="nav-link">Sleep Tool</a></li>
+                <li><a href="#skills" class="nav-link">Skills</a></li>
+                <li><a href="#projects" class="nav-link">Projects</a></li>
+                <li><a href="#contact" class="nav-link">Contact</a></li>
+                <li><span class="nav-cta">🤖 Discord Dashboard</span></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+        <!-- Hero Section -->
+        <section class="hero-section">
+            <div class="container reveal">
+                <div class="status-badge">
+                    <span class="pulse-dot"></span>
+                    <span>Available for Projects & Collaboration</span>
+                </div>
+
+                <h1 class="hero-title">
+                    Hi, I'm <span class="gradient-text">Mahdi</span>
+                </h1>
+
+                <p class="hero-subtitle">
+                    Starter Web & Software Developer based in <strong>Kuwait 🇰🇼</strong>.<br>
+                    Crafting clean web experiences, progressive applications, and custom automated bot systems.
+                </p>
+
+                <div class="hero-actions">
+                    <a href="#projects" class="btn btn-primary">
+                        <span>Explore Projects</span>
+                        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </a>
+                    <a href="/about" class="btn btn-secondary">
+                        <span>Read About Me</span>
+                    </a>
+                    <a href="/dis" class="btn btn-outline">
+                        <span>Live Bot Dashboard (/dis)</span>
+                        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+                        </svg>
+                    </a>
+                </div>
+
+                <!-- Stats Bar -->
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Location</div>
+                        <div class="stat-value">Kuwait 🇰🇼</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Certification</div>
+                        <div class="stat-value">Python Certified 🐍</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Focus Areas</div>
+                        <div class="stat-value">Web Apps & Bots ⚡</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Bot Live Hub</div>
+                        <div class="stat-value"><a href="/dis" style="color: inherit; text-decoration: none;">mwq-dev.top/dis 🚀</a></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- About Me Preview Section -->
+        <section id="about" class="container reveal">
+            <div class="section-header">
+                <span class="section-tag">Introduction</span>
+                <h2 class="section-title">About Me</h2>
+                <p class="section-description">A quick look at my passion for coding and continuous learning.</p>
+            </div>
+
+            <div class="about-preview-card">
+                <div class="about-preview-text">
+                    <h3>Curiosity Turned into Code</h3>
+                    <p>
+                        My passion for technology started in my childhood when I loved creating games. Since then, I've attended coding clubs, honed my programming fundamentals, and earned an official Python certificate.
+                    </p>
+                    <p>
+                        While I am at the beginning of my journey as a developer, I am constantly learning, writing cleaner code, and building useful everyday tools and interactive bot services.
+                    </p>
+                    <a href="/about" class="btn btn-secondary" style="margin-top: 0.5rem;">
+                        <span>Read Full Story & Bio →</span>
+                    </a>
+                </div>
+
+                <div class="about-meta-list">
+                    <div class="about-meta-box">
+                        <div class="meta-icon">🎮</div>
+                        <div class="meta-info">
+                            <h4>Gaming Roots</h4>
+                            <p>Started early by dreaming up games and discovering how software actually works.</p>
+                        </div>
+                    </div>
+                    <div class="about-meta-box">
+                        <div class="meta-icon">📜</div>
+                        <div class="meta-info">
+                            <h4>Python Certified</h4>
+                            <p>Certified foundations in logic, scripts, and algorithmic problem-solving.</p>
+                        </div>
+                    </div>
+                    <div class="about-meta-box">
+                        <div class="meta-icon">⚙️</div>
+                        <div class="meta-info">
+                            <h4>Active Builder</h4>
+                            <p>Continuously deploying web platforms, PWAs, and Discord server automations.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Skills Section -->
+        <section id="skills" class="container reveal">
+            <div class="section-header">
+                <span class="section-tag">Core Technologies</span>
+                <h2 class="section-title">Skills & Stack</h2>
+                <p class="section-description">Technologies and tools I use to create modern web software.</p>
+            </div>
+
+            <div class="skills-grid">
+                <div class="skill-card">
+                    <div class="skill-icon-wrap">🌐</div>
+                    <h3>Frontend Development</h3>
+                    <p>Crafting sleek, responsive user interfaces that adapt gracefully across all devices.</p>
+                    <div class="pill-group">
+                        <span class="tech-pill">HTML5</span>
+                        <span class="tech-pill">CSS3 / Modern Layouts</span>
+                        <span class="tech-pill">JavaScript (ES6+)</span>
+                        <span class="tech-pill">Progressive Web Apps (PWA)</span>
+                    </div>
+                </div>
+
+                <div class="skill-card">
+                    <div class="skill-icon-wrap">🐍</div>
+                    <h3>Python & Scripting</h3>
+                    <p>Certified foundations in Python for scripting, logic automation, and algorithmic thinking.</p>
+                    <div class="pill-group">
+                        <span class="tech-pill">Python</span>
+                        <span class="tech-pill">Scripting</span>
+                        <span class="tech-pill">Automation</span>
+                        <span class="tech-pill">Data Handling</span>
+                    </div>
+                </div>
+
+                <div class="skill-card">
+                    <div class="skill-icon-wrap">🤖</div>
+                    <h3>Bot & Server Engineering</h3>
+                    <p>Building real-time server backends, interactive dashboards, and Discord bot networks.</p>
+                    <div class="pill-group">
+                        <span class="tech-pill">Node.js</span>
+                        <span class="tech-pill">Express.js</span>
+                        <span class="tech-pill">Discord.js v14</span>
+                        <span class="tech-pill">REST APIs</span>
+                    </div>
+                </div>
+
+                <div class="skill-card">
+                    <div class="skill-icon-wrap">🛠️</div>
+                    <h3>Tools & Workflow</h3>
+                    <p>Standard industry tooling to manage source code, debug efficiently, and deploy safely.</p>
+                    <div class="pill-group">
+                        <span class="tech-pill">Git & GitHub</span>
+                        <span class="tech-pill">VS Code</span>
+                        <span class="tech-pill">PM2 Process Manager</span>
+                        <span class="tech-pill">IoT (eWeLink API)</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Projects Section -->
+        <section id="projects" class="container reveal">
+            <div class="section-header">
+                <span class="section-tag">Portfolio Showcase</span>
+                <h2 class="section-title">Featured Projects</h2>
+                <p class="section-description">Real-world applications and systems I have designed and deployed.</p>
+            </div>
+
+            <div class="projects-grid">
+                <!-- Project 1: Weather Web -->
+                <div class="project-card">
+                    <div>
+                        <div class="project-badge-bar">
+                            <span class="project-tag live-tag">● Live Web App</span>
+                            <span class="tech-pill">PWA / Mobile</span>
+                        </div>
+                        <h3 class="project-title">Weather Web</h3>
+                        <p class="project-desc">
+                            A comprehensive weather application installable directly on Android devices as a Progressive Web App (PWA). Includes an administrative management panel, news feed, and accurate real-time forecasts from cities across the world.
+                        </p>
+                        <div class="project-credentials">
+                            🔑 Demo Access: user / pass (<code>11</code>)
+                        </div>
+                    </div>
+                    <div class="project-footer">
+                        <a href="https://j8wq.github.io/m" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.88rem;">
+                            <span>Launch App</span>
+                            <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Project 2: Discord Bot Ecosystem -->
+                <div class="project-card">
+                    <div>
+                        <div class="project-badge-bar">
+                            <span class="project-tag live-tag">● Live Ecosystem</span>
+                            <span class="tech-pill">Node & Express</span>
+                        </div>
+                        <h3 class="project-title">Discord Bot Management Dashboard</h3>
+                        <p class="project-desc">
+                            A multi-bot infrastructure running 24/7 with real-time health telemetry, live websocket ping latency monitoring, server count metrics, log streamer, and smart IoT device integration via eWeLink.
+                        </p>
+                        <div class="project-credentials">
+                            ⚡ Available directly at: <code>mwq-dev.top/dis</code>
+                        </div>
+                    </div>
+                    <div class="project-footer">
+                        <a href="/dis" class="btn btn-secondary" style="padding: 0.65rem 1.4rem; font-size: 0.88rem;">
+                            <span>Open Dashboard (/dis) →</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Project 3: Sleep Cycle Scheduler -->
+                <div class="project-card">
+                    <div>
+                        <div class="project-badge-bar">
+                            <span class="project-tag live-tag">● Live Web Tool</span>
+                            <span class="tech-pill">Health & Rest</span>
+                        </div>
+                        <h3 class="project-title">Sleep Cycle Scheduler</h3>
+                        <p class="project-desc">
+                            A smart rest cycle calculator that uses 90-minute human biological sleep cycle intervals. Helps calculate optimal bedtimes, avoid sleep inertia grogginess, and calculate target wake-up times.
+                        </p>
+                        <div class="project-credentials">
+                            🌙 Available at: <code>mwq-dev.top/sleep</code>
+                        </div>
+                    </div>
+                    <div class="project-footer">
+                        <a href="/sleep" class="btn btn-secondary" style="padding: 0.65rem 1.4rem; font-size: 0.88rem;">
+                            <span>Open Sleep Tool (/sleep) →</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Contact Section -->
+        <section id="contact" class="container reveal">
+            <div class="contact-card">
+                <span class="section-tag" style="color: #a5b4fc;">Get In Touch</span>
+                <h2 class="contact-title">Let's Connect & Build Together</h2>
+                <p class="contact-subtitle">
+                    Have an idea for a web project, need a custom Discord bot, or just want to discuss software development? Feel free to reach out anytime!
+                </p>
+
+                <div class="contact-box">
+                    <span style="font-size: 1.25rem;">✉️</span>
+                    <a href="mailto:goku33mm@gmail.com" class="email-display">goku33mm@gmail.com</a>
+                    <button class="copy-btn" onclick="copyEmail('goku33mm@gmail.com')" aria-label="Copy email address">
+                        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                        </svg>
+                        <span>Copy</span>
+                    </button>
+                </div>
+
+                <div class="contact-links">
+                    <a href="mailto:goku33mm@gmail.com" class="btn btn-primary">
+                        <span>Send Direct Email</span>
+                    </a>
+                    <a href="/about" class="btn btn-secondary">
+                        <span>Read Full Bio</span>
+                    </a>
+                    <a href="/dis" class="btn btn-outline">
+                        <span>Bot Dashboard (/dis)</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container footer-content">
+            <div class="footer-brand">
+                <a href="/" class="brand-logo">
+                    <span class="brand-badge">MWQ</span>
+                    <span class="brand-name">mwq-dev.top</span>
+                </a>
+                <span class="footer-tagline">Web Developer & Discord Bot Architect &bull; Kuwait</span>
+            </div>
+
+            <ul class="footer-links">
+                <li><a href="/" class="footer-link">Home</a></li>
+                <li><a href="/about" class="footer-link">About</a></li>
+                <li><a href="/sleep" class="footer-link">Sleep Tool</a></li>
+                <li><a href="#projects" class="footer-link">Projects</a></li>
+                <li><a href="/dis" class="footer-link">Discord Dashboard (/dis)</a></li>
+                <li><a href="#contact" class="footer-link">Contact</a></li>
+            </ul>
+
+            <div class="copyright">
+                &copy; 2026 Mahdi (<strong>mwq-dev.top</strong>). All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+    <!-- Toast Notification for Copy -->
+    <div id="toastNotice" class="toast-notice">Email copied to clipboard!</div>
+
+    <script src="script.js"></script>
+</body>
+</html>

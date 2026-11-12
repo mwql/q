@@ -1,0 +1,25 @@
+{
+  "name": "mwq_test",
+  "version": "1.0.0",
+  "description": "Quick setup and security steps.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ascii-table": "^0.0.9",
+    "discord.js": "^14.26.2",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "fs": "^0.0.1-security",
+    "fx": "^39.2.0",
+    "ewelink-api-next": "^1.0.4",
+    "googleapis": "^171.4.0",
+    "pm2": "^6.0.14"
+  }
+}
